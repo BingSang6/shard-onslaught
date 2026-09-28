@@ -1,0 +1,801 @@
+extends Node
+## 《碎晶突围》headless 冒烟测试（阶段1+2 验收）
+## 运行：godot --headless --path . res://tests/smoke_test.tscn
+## 覆盖 PRD「8.测试要求」中阶段1+2 相关项：
+##   1. 状态机/开局流程、刷怪、击杀掉经验
+##   2. 升级 3 选 1、重复技能升级、弹窗期间世界暂停
+##   3. 碎裂引爆连锁爆炸、连锁层数 ≤ MAX_CHAIN=8、大数量压力下不卡死
+##   4. 引力漩涡聚集效果（与碎裂引爆组合的前置验证）
+##   5. 晶盾/瞬闪/晶刺弹射/晶域 单技能行为
+##   6. 通关与失败结算、失败也发晶核、存档读写往返
+##   7. 阶段3：永久强化购买/跨局生效、图鉴解锁、BOSS 临时增益、结算晶核明细
+## 退出码：0=全部通过，1=有失败项
+
+var checks := 0
+var failures := 0
+var main: Node2D
+
+
+func _ready() -> void:
+	# 测试驱动器在暂停期间也要继续跑（升级弹窗会 paused=true）
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	await get_tree().process_frame
+	await _run_all()
+	print("\n========== 冒烟测试结果：%d 项检查，%d 失败 ==========" % [checks, failures])
+	get_tree().quit(1 if failures > 0 else 0)
+
+
+func check(cond: bool, msg: String) -> void:
+	checks += 1
+	if cond:
+		print("  [PASS] " + msg)
+	else:
+		failures += 1
+		print("  [FAIL] " + msg)
+
+
+## 推进 n 个“60fps 帧”当量的真实时间（headless 帧率不封顶，
+## 不能用 process_frame 计数，改用真实时钟保证物理 tick 数量正确；
+## create_timer 默认 process_always=true，暂停期间也能继续等待）
+func tick(n: int) -> void:
+	await get_tree().create_timer(n / 60.0).timeout
+
+
+## 测试前置清理：消化一切挂起的升级弹窗（晶粒溢出回收会意外升级），
+## 清空经验与场上晶粒，确保树处于未暂停的 PLAYING 状态。
+func force_resume() -> void:
+	var guard := 0
+	while (main.state == 2 or main.pending_levelups > 0) and guard < 20:
+		main._on_upgrade_chosen("heal")
+		guard += 1
+	main.state = 1
+	main.xp = 0.0
+	main.pending_levelups = 0
+	main.get_tree().paused = false
+	for d in main.get_tree().get_nodes_in_group("drops"):
+		d.queue_free()
+
+
+func _run_all() -> void:
+	seed(424242)
+	# 复位存档，避免上一轮测试的晶核/永久强化影响断言（局外加成会改初始血量）
+	GameData.crystal_core = 0
+	for key in GameData.permanent_upgrades.keys():
+		GameData.permanent_upgrades[key] = 0
+	GameData.unlocked_monsters.clear()
+	GameData.save_game()
+	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	# 测试驱动器为 ALWAYS，主场景需显式 PAUSABLE，世界才能被 paused 冻结
+	main.process_mode = Node.PROCESS_MODE_PAUSABLE
+	add_child(main)
+	await get_tree().process_frame
+
+	# 状态枚举（main.gd: MENU=0 PLAYING=1 UPGRADE_PANEL=2 SETTLE=3）
+	await _t_flow_and_spawn()
+	await _t_kill_and_xp()
+	await _t_upgrade_panel()
+	await _t_pause_freezes_world()
+	await _t_chain_explosion()
+	await _t_chain_stress_no_hang()
+	await _t_vortex_pull()
+	await _t_shield()
+	await _t_dash()
+	await _t_ricochet()
+	await _t_aura()
+	await _t_boss_spawn()
+	await _t_win_settle()
+	await _t_lose_settle_and_save()
+	await _t_save_roundtrip()
+	await _t_perm_shop()
+	await _t_perm_cross_run()
+	await _t_codex()
+	await _t_boss_buff()
+	await _t_settle_breakdown()
+	await _t_audio()
+	await _t_boss3_armor()
+	await _t_boss2_split()
+	await _t_boss5_phases()
+	await _t_supply_drops()
+	await _t_weapons()
+	await _t_upgrade_optimize()
+
+
+# ---------------- T1 状态机与刷怪 ----------------
+
+func _t_flow_and_spawn() -> void:
+	print("\n[T1] 状态机/开局/刷怪")
+	check(main.state == 0, "初始为 MENU 状态")
+	main.start_run()
+	await tick(2)
+	check(main.state == 1, "start_run 后进入 PLAYING")
+	check(is_instance_valid(main.player) and main.player.hp == 100.0, "玩家存在且满血")
+	check(main.wave_manager.current_wave == 1, "波次制：开局进入第 1 关")
+	check(main.wave_manager.wave_time_left > float(GameConfig.WAVE_TABLE[0]["duration"]) - 1.0,
+		"本关倒计时已启动（波次时限 %.0fs）" % GameConfig.WAVE_TABLE[0]["duration"])
+	await tick(140)  # ~2.3s
+	var monsters: int = main.get_tree().get_nodes_in_group("monsters").size()
+	check(monsters > 0, "2 秒内已开始刷怪（当前 %d 只）" % monsters)
+	check(monsters <= GameConfig.MAX_MONSTERS, "同屏怪物未超上限")
+	# 关闭刷怪与自动攻击，后续用例走确定性路径
+	main.spawner.enabled = false
+	main.player.set("_fire_cd", 1e9)
+
+
+# ---------------- T2 击杀掉落经验 ----------------
+
+func _t_kill_and_xp() -> void:
+	print("\n[T2] 击杀/晶粒/经验")
+	main._clear_world()
+	main.kill_count = 0
+	main.xp = 0.0
+	var m: Monster = main.spawner.spawn_monster("small", main.player.position + Vector2(200, 0))
+	check(m.alive, "手动生成怪物成功")
+	m.take_damage(9999.0)
+	await tick(3)
+	check(main.kill_count == 1, "击杀数 +1")
+	check(main.get_tree().get_nodes_in_group("drops").size() >= 1, "死亡掉落晶粒")
+	# 晶粒瞬移到玩家脚下触发磁吸拾取
+	for d in main.get_tree().get_nodes_in_group("drops"):
+		d.position = main.player.position
+	await tick(5)
+	check(main.xp > 0.0, "拾取晶粒获得经验（xp=%.0f）" % main.xp)
+
+
+# ---------------- T3 升级 3 选 1 与重复升级 ----------------
+
+func _t_upgrade_panel() -> void:
+	print("\n[T3] 升级弹窗/重复技能升级")
+	main.level = 1
+	main.xp = 0.0
+	main._on_xp_gained(GameConfig.xp_to_next(main.level))
+	await tick(2)
+	check(main.state == 2, "经验满后进入 UPGRADE_PANEL")
+	check(main.upgrade_panel._root.visible, "3 选 1 弹窗已显示")
+	main._on_upgrade_chosen("aura")
+	await tick(2)
+	check(main.skills.get_level("aura") == 1, "选择后习得晶域扩散 Lv1")
+	check(main.state == 1 and not main.get_tree().paused, "选卡后恢复 PLAYING")
+	# 同技能重复获取 → 升级
+	main._on_xp_gained(GameConfig.xp_to_next(main.level))
+	await tick(2)
+	main._on_upgrade_chosen("aura")
+	check(main.skills.get_level("aura") == 2, "重复选择同一技能升至 Lv2")
+	# 一次给多级经验 → 连升合并（任务书 §5.3）：只弹 1 次窗，选 1 个其余自动学推荐
+	main.pending_levelups = 0
+	main._on_xp_gained(GameConfig.xp_to_next(main.level) * 2.5)
+	await tick(2)
+	check(main.state == 2 and main.pending_levelups == 2, "多级经验合并入账（pending=%d）" % main.pending_levelups)
+	main._on_upgrade_chosen("fire_rate")
+	await tick(2)
+	check(main.state == 1 and main.pending_levelups == 0 and not main.get_tree().paused,
+		"连升合并：单次弹窗选 1 项即消化全部等级并恢复战斗")
+
+
+# ---------------- T4 弹窗暂停世界 ----------------
+
+func _t_pause_freezes_world() -> void:
+	print("\n[T4] 升级弹窗期间世界暂停")
+	var m: Monster = main.spawner.spawn_monster("small", Vector2(200, 300))
+	m.speed = 0.0
+	var pos_before: Vector2 = m.position
+	main._open_upgrade_panel()
+	await tick(12)
+	check(main.get_tree().paused, "弹窗期间树已暂停")
+	check(m.position == pos_before, "暂停期间怪物静止")
+	main._on_upgrade_chosen("heal")
+	await tick(2)
+	check(not main.get_tree().paused, "选卡后解除暂停")
+
+
+# ---------------- T5 连锁爆炸 ----------------
+
+func _t_chain_explosion() -> void:
+	print("\n[T5] 碎裂引爆连锁爆炸")
+	main._clear_world()
+	main.kill_count = 0
+	main.skills.acquire("shatter_blast")
+	check(main.skills.get_level("shatter_blast") == 1, "习得碎裂引爆")
+	# 玩家远离测试区（避免自动索敌干扰）
+	main.player.position = Vector2(500, 900)
+	var c := Vector2(200, 300)
+	var center: Monster = null
+	for i in 12:
+		var pos := c + Vector2((i % 4) * 55.0, (i / 4) * 55.0)
+		var m: Monster = main.spawner.spawn_monster("small", pos)
+		if i == 5:
+			center = m
+	var kills_before: int = main.kill_count
+	center.take_damage(9999.0)
+	await tick(40)  # ~0.7s，等待队列连锁扩散
+	var combo: int = main.effect_manager.max_combo
+	check(main.kill_count - kills_before >= 4, "连锁造成多只击杀（+%d）" % (main.kill_count - kills_before))
+	check(combo >= 4, "连锁连击数 ≥4（实际 x%d）" % combo)
+	check(main.effect_manager.last_chain_level <= GameConfig.MAX_CHAIN, "连锁层数未超过 MAX_CHAIN=8")
+
+
+# ---------------- T6 连锁压力（防死循环/卡死） ----------------
+
+func _t_chain_stress_no_hang() -> void:
+	print("\n[T6] 连锁压力测试（200 只密集怪）")
+	main._clear_world()
+	main.kill_count = 0
+	main.skills.acquire("shatter_blast")  # 升到 Lv2
+	var c := Vector2(320, 320)
+	var center: Monster = null
+	var spawned := 0
+	for i in 200:
+		var ring := i / 20
+		var pos := c + Vector2.from_angle((i % 20) * TAU / 20.0) * (18.0 + ring * 30.0)
+		var m: Monster = main.spawner.spawn_monster("small", pos)
+		spawned += 1
+		if i == 100:
+			center = m
+	center.take_damage(9999.0)
+	await tick(150)  # ~2.5s；若连锁死循环此处会超时/崩溃
+	var alive_now: int = main.get_tree().get_nodes_in_group("monsters").filter(func(m): return m.alive).size()
+	check(true, "压力连锁后引擎仍响应（未卡死）")
+	check(alive_now < spawned, "大量怪物被连锁清除（存活 %d/%d）" % [alive_now, spawned])
+	check(main.effect_manager.last_chain_level <= GameConfig.MAX_CHAIN, "连锁层数被正确截断 ≤8")
+
+
+# ---------------- T7 引力漩涡聚集 ----------------
+
+func _t_vortex_pull() -> void:
+	force_resume()
+	print("\n[T7] 引力漩涡吸附聚集")
+	main._clear_world()
+	await tick(2)  # 等待待销毁怪物退出群组，保证聚类采样确定性
+	main.skills.acquire("vortex")
+	var c := Vector2(150, 200)
+	var monsters: Array[Monster] = []
+	for i in 6:
+		# 半径 70 的六边形环：任意两只间距 ≤140，全部在 Lv1 漩涡半径 155 内
+		var m: Monster = main.spawner.spawn_monster("small", c + Vector2.from_angle(TAU * i / 6.0) * 70.0)
+		m.speed = 1.0  # 关闭追人移动，隔离引力效果
+		monsters.append(m)
+	# 用怪物两两间距衡量聚集度（漩涡中心会落在最密的怪物处，不能按几何环心度量）
+	var spread := func() -> float:
+		var total := 0.0
+		for i in monsters.size():
+			for j in range(i + 1, monsters.size()):
+				var mi = monsters[i]
+				var mj = monsters[j]
+				if is_instance_valid(mi) and is_instance_valid(mj):
+					total += mi.position.distance_to(mj.position)
+		return total
+	var before: float = spread.call()
+	main.skills.trigger_vortex_now()
+	await tick(100)  # ~1.7s 吸附
+	var after: float = spread.call()
+	check(after < before * 0.5, "怪物被吸向漩涡中心聚团（两两间距和 %.0f → %.0f）" % [before, after])
+
+
+# ---------------- T8 晶盾 ----------------
+
+func _t_shield() -> void:
+	force_resume()
+	print("\n[T8] 晶盾抵挡一次伤害")
+	main.skills.acquire("shield")
+	await tick(6)  # 等待护盾充能
+	var hp_before: float = main.player.hp
+	main.player.take_damage(50.0)
+	check(main.player.hp == hp_before, "晶盾抵挡了本次伤害")
+	await tick(25)  # 等待破盾无敌帧（0.35s）结束
+	main.player.take_damage(50.0)
+	check(main.player.hp == hp_before - 50.0, "破盾后伤害正常结算")
+	main.player.heal(200.0)
+
+
+# ---------------- T9 瞬闪 ----------------
+
+func _t_dash() -> void:
+	force_resume()
+	print("\n[T9] 瞬闪位移")
+	main.skills.acquire("dash")
+	main.player.position = Vector2(500, 900)
+	var y_before: float = main.player.position.y
+	main.player.try_dash()  # 无输入时默认向上冲刺
+	await tick(14)
+	var moved: float = y_before - main.player.position.y
+	check(moved > 100.0, "瞬闪完成冲刺位移（%.0f px）" % moved)
+
+
+# ---------------- T10 晶刺弹射 ----------------
+
+func _t_ricochet() -> void:
+	force_resume()
+	print("\n[T10] 晶刺弹射")
+	main._clear_world()
+	main.skills.acquire("ricochet")
+	# 两只怪物并排（远离玩家，避免其他干扰；定住不动保证弹道命中）
+	var base := Vector2(120, 150)
+	var a: Monster = main.spawner.spawn_monster("small", base)
+	var b: Monster = main.spawner.spawn_monster("small", base + Vector2(120, 30))
+	a.speed = 0.0
+	b.speed = 0.0
+	var p := Projectile.new()
+	p.setup(base - Vector2(0, 300), Vector2(0, 1) * 350.0, 50.0, 0.0)
+	p.set_ricochet(1, 400.0, 0.9)
+	main.projectile_layer.add_child(p)
+	await tick(95)  # ~1.6s：命中首目标约 0.86s + 弹射飞抵第二目标约 0.35s
+	check(not is_instance_valid(a) or not a.alive, "首目标被晶刺击杀")
+	check(not is_instance_valid(b) or not b.alive, "晶刺弹射击中第二目标")
+
+
+# ---------------- T11 晶域扩散 ----------------
+
+func _t_aura() -> void:
+	force_resume()
+	print("\n[T11] 晶域扩散持续伤害")
+	main._clear_world()
+	main.skills.acquire("aura")
+	main.skills.acquire("aura")  # 升到 Lv2：dps=16，确保 1.2 秒内击杀 12 血小怪
+	var m: Monster = main.spawner.spawn_monster("small", main.player.position + Vector2(50, 0))
+	m.speed = 0.0
+	await tick(70)  # ~1.2s：Lv2 晶域 dps=16 → 累计远超 12 血
+	check(not is_instance_valid(m) or not m.alive, "晶域切割致死靠近怪物")
+
+
+# ---------------- T12 波次推进与 BOSS 关（第 3 关碎晶王） ----------------
+
+func _t_boss_spawn() -> void:
+	force_resume()
+	print("\n[T12] 波次推进与 BOSS 关（第 2→3→4 关）")
+	main._clear_world()
+	main.state = 1
+	main.wave_manager.reset(main.player, main.spawner, main.drop_manager)
+	main.spawner.enabled = false       # 隔离刷怪，走确定性路径
+	main.wave_manager.current_wave = 2 # 直接拨到第 2 关末尾
+	main.wave_manager.wave_time_left = 0.05
+	await tick(10)   # ~0.17s：第 2 关时限到 → 3s 过渡
+	check(main.wave_manager.state == 1, "关末进入 TRANSITION（3s 过渡）")
+	await tick(195)  # ~3.25s：过渡结束 → 第 3 关 BOSS 出场
+	check(main.wave_manager.current_wave == 3, "过渡后进入第 3 关")
+	var boss: Monster = main.wave_manager.get_boss()
+	check(boss != null and boss.alive and boss.monster_id == "boss1",
+		"第 3 关生成碎晶王（HP %.0f）" % (boss.max_hp if boss != null else 0.0))
+	check(boss != null and is_equal_approx(boss.max_hp, 400.0), "碎晶王 HP=400（BOSSES 配置）")
+	check(not main.spawner.enabled, "BOSS 关暂停常规刷怪")
+	check(main.hud.boss_name_label.get_parent().visible, "HUD BOSS 血条已显示")
+	# 击杀 BOSS → 过关 + 奖励（回血 30 / 攻击+6 / 晶核 15 入明细）
+	main.player.set("_fire_cd", 1e9)
+	main.player.hp = 50.0
+	var atk_before: float = main.player._current_attack()
+	boss.take_damage(99999.0)
+	await tick(6)
+	check(main.boss_killed and main.boss_core_reward == 15, "BOSS 击破：标记 + 晶核 15 入明细")
+	check(main.player.hp > 50.0, "碎晶王击破奖励回血 +30")
+	check(main.player._current_attack() == atk_before + 6.0, "击破奖励攻击 +6（20s）")
+	await tick(200)  # ~3.3s：过渡结束进入第 4 关
+	check(main.wave_manager.current_wave == 4, "BOSS 击破后进入第 4 关")
+	check(main.spawner.enabled, "第 4 关（精英+）恢复常规刷怪")
+	main.spawner.enabled = false
+
+
+# ---------------- T13 通关结算（第 10 关） ----------------
+
+func _t_win_settle() -> void:
+	force_resume()
+	print("\n[T13] 第 10 关结束通关结算")
+	main._clear_world()
+	main.state = 1
+	main.wave_manager.reset(main.player, main.spawner, main.drop_manager)
+	main.spawner.enabled = false
+	main.wave_manager.current_wave = 10   # 拨到最终关，时限将至
+	main.wave_manager.wave_time_left = 0.05
+	var core_before: int = GameData.crystal_core
+	await tick(30)
+	check(main.state == 3, "第 10 关结束进入 SETTLE（通关）")
+	check(main.settle_panel._root.visible, "结算面板已显示")
+	check(GameData.crystal_core > core_before, "通关发放晶核并入档")
+	check(GameData.cleared_all, "通关标识已存档（cleared_all）")
+	check(GameData.max_wave == 10, "最高关卡记录 = 10")
+	main.settle_panel.close()
+
+
+# ---------------- T14 失败结算（失败也发晶核） ----------------
+
+func _t_lose_settle_and_save() -> void:
+	print("\n[T14] 血量归零失败结算")
+	main.start_run()
+	await tick(5)
+	main.spawner.enabled = false
+	main.player.set("_fire_cd", 1e9)
+	var core_before: int = GameData.crystal_core
+	main.player.take_damage(99999.0)
+	await tick(5)
+	check(main.state == 3, "血量归零进入 SETTLE")
+	check(GameData.crystal_core > core_before, "失败也发放晶核（降低挫败感）")
+	main.settle_panel.close()
+
+
+# ---------------- T15 存档往返 ----------------
+
+func _t_save_roundtrip() -> void:
+	print("\n[T15] 存档保存/读取往返")
+	GameData.crystal_core = 777
+	GameData.permanent_upgrades["hp"] = 3
+	GameData.save_game()
+	GameData.crystal_core = 0
+	GameData.permanent_upgrades["hp"] = 0
+	GameData.load_save()
+	check(GameData.crystal_core == 777, "晶核读档一致")
+	check(GameData.permanent_upgrades["hp"] == 3, "永久强化等级读档一致")
+
+
+# ---------------- T16 永久强化购买（阶段3） ----------------
+
+func _t_perm_shop() -> void:
+	print("\n[T16] 永久强化购买（晶核消耗/费用曲线/满级）")
+	GameData.crystal_core = 100
+	GameData.permanent_upgrades["hp"] = 0
+	var ok: bool = GameData.try_upgrade("hp")
+	check(ok, "晶核足够时购买成功")
+	check(GameData.permanent_upgrades["hp"] == 1, "永久强化等级 +1")
+	check(GameData.crystal_core == 70, "按费用曲线扣费（100 - 30 = 70）")
+	GameData.crystal_core = 0
+	check(not GameData.try_upgrade("hp"), "晶核不足时购买失败")
+	check(GameData.permanent_upgrades["hp"] == 1, "购买失败时等级不变")
+	GameData.crystal_core = 999
+	check(GameData.try_upgrade("start_skill"), "购买开局技能（120 晶核）")
+	check(not GameData.try_upgrade("start_skill"), "满级（max_lv=1）后不可再升")
+
+
+# ---------------- T17 永久强化跨局生效（PRD 8-3） ----------------
+
+func _t_perm_cross_run() -> void:
+	print("\n[T17] 永久强化跨局生效")
+	GameData.permanent_upgrades["hp"] = 2
+	GameData.permanent_upgrades["attack"] = 1
+	GameData.permanent_upgrades["pick_range"] = 1
+	GameData.permanent_upgrades["start_skill"] = 0
+	main.start_run()
+	await tick(3)
+	main.spawner.enabled = false
+	main.player.set("_fire_cd", 1e9)
+	check(main.player.max_hp == 110.0, "初始血量 100 + 5×2 = 110")
+	check(main.player.base_attack == 10.0, "初始攻击 8 + 2×1 = 10")
+	check(main.player.pick_radius == 110.0, "拾取半径 90 + 20×1 = 110")
+
+
+# ---------------- T18 图鉴解锁与面板（阶段3） ----------------
+
+func _t_codex() -> void:
+	force_resume()
+	print("\n[T18] 图鉴解锁与面板")
+	main._clear_world()
+	GameData.unlocked_monsters.clear()
+	var m: Monster = main.spawner.spawn_monster("small", main.player.position + Vector2(150, 0))
+	m.take_damage(9999.0)
+	await tick(3)
+	check(GameData.unlocked_monsters.has("small"), "击杀后图鉴解锁该怪物类型")
+	main.codex_panel.open()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var rows: int = main.codex_panel._rows_box.get_children() \
+		.filter(func(c): return not c.is_queued_for_deletion()).size()
+	check(rows == 3, "图鉴面板展示 3 条怪物条目")
+	main.codex_panel.close()
+
+
+# ---------------- T19 BOSS 击破奖励（阶段3 → BOSSES.reward） ----------------
+
+func _t_boss_buff() -> void:
+	force_resume()
+	print("\n[T19] BOSS 击破奖励（碎晶王：回血+攻击增益）")
+	var atk_before: float = main.player._current_attack()
+	main.player.hp = 60.0
+	main._apply_boss_reward("boss1")
+	check(main.player._current_attack() == atk_before + 6.0, "击破后晶刺伤害 +6")
+	check(main.player.attack_buff_active(), "增益处于生效中")
+	check(main.player.hp == 90.0, "碎晶王奖励回血 +30")
+	# 晶甲巨兽奖励：最大生命 +20
+	var maxhp_before: float = main.player.max_hp
+	main._apply_boss_reward("boss3")
+	check(main.player.max_hp == maxhp_before + 20.0, "巨兽精粹：最大生命 +20")
+	# 引力魔核奖励：射速增益（间隔 ÷1.15）
+	var interval_before: float = main.player._current_fire_interval()
+	main._apply_boss_reward("boss4")
+	check(main.player._current_fire_interval() < interval_before, "魔核共鸣：射速增益缩短发射间隔")
+	main.player._buff_time = 0.3                 # 压缩等待：直接把剩余时间拨到快到期
+	main.player._fire_buff_time = 0.3
+	await tick(25)
+	check(not main.player.attack_buff_active(), "增益到期后失效")
+	check(main.player._current_attack() == atk_before, "攻击恢复基础值")
+
+
+# ---------------- T20 结算晶核明细（阶段3） ----------------
+
+func _t_settle_breakdown() -> void:
+	force_resume()
+	print("\n[T20] 结算晶核明细 breakdown + 到达关卡")
+	main._clear_world()
+	main.state = 1
+	main.kill_count = 7
+	main.effect_manager.max_combo = 5
+	main.boss_core_reward = 15                    # BOSS 击破晶核奖励（BOSSES.reward.core）
+	var holder: Array = []                       # lambda 捕获是值拷贝，须用引用容器带回数据
+	GameEvents.run_finished.connect(func(_won, s): holder.append(s), CONNECT_ONE_SHOT)
+	main._finish_run(false)
+	var stats: Dictionary = holder[0] if not holder.is_empty() else {}
+	check(not stats.is_empty(), "run_finished 信号携带结算数据")
+	var bd: Dictionary = stats.get("breakdown", {})
+	check(int(bd.get("kills", -1)) == 7 and int(bd.get("combo", -1)) == 10 \
+		and int(bd.get("boss", -1)) == 15 and int(bd.get("base", -1)) == 10,
+		"明细各项正确（击杀7 / 连锁×2=10 / BOSS15 / 失败保底10）")
+	check(int(stats.get("cores", -1)) == 42, "合计晶核 = 42 且与明细求和一致")
+	check(int(stats.get("wave", -1)) == main.wave_manager.current_wave
+		and int(stats.get("wave_total", -1)) == GameConfig.WAVE_COUNT,
+		"结算 stats 携带到达关卡（第 %d/%d 关）" % [stats.get("wave", 0), stats.get("wave_total", 0)])
+	main.settle_panel.close()
+
+
+# ---------------- T21 程序化音频（阶段4） ----------------
+
+func _t_audio() -> void:
+	print("\n[T21] 程序化音频 SoundManager")
+	# 1. Autoload 就绪 + 短音效样本全量合成（17 种）
+	check(SoundManager != null and not SoundManager._samples.is_empty(), "SoundManager 就绪且样本表非空")
+	var expect := ["shot", "hit", "kill", "chain", "xp", "hurt", "heal", "dash",
+		"levelup", "choose", "start", "boss_spawn", "boss_kill", "win", "lose", "click", "buy"]
+	var all_ok := true
+	for id in expect:
+		if not SoundManager._samples.has(id):
+			all_ok = false
+	check(all_ok, "17 种短音效样本全部合成")
+	# 2. 逐个播放不报错
+	for id in expect:
+		SoundManager.play(id)
+	check(true, "全部音效可播放（无脚本错误）")
+	# 3. 节流：间隔内重复播放被忽略（play 后立即再 play，应被节流挡掉一次）
+	SoundManager._last_play.clear()
+	SoundManager.play("xp")
+	var ts_first: int = SoundManager._last_play.get("xp", -1)
+	SoundManager.play("xp")
+	check(int(SoundManager._last_play.get("xp", -1)) == ts_first, "高频音效节流生效（间隔内不重复发声）")
+	# 4. 静音切换 + 存档持久化往返
+	GameData.muted = false
+	var muted_now := SoundManager.toggle_mute()
+	GameData.save_game()
+	var saved_muted: bool = GameData.muted
+	GameData.muted = false
+	GameData.load_save()
+	check(muted_now and saved_muted and GameData.muted, "toggle_mute 切换且存档往返保留静音状态")
+	SoundManager.toggle_mute()  # 恢复未静音
+	# 5. 事件接线：GameEvents 信号触发播放链路无错
+	GameEvents.shot_fired.emit()
+	GameEvents.projectile_hit.emit()
+	GameEvents.boss_spawned.emit()
+	GameEvents.chain_triggered.emit(5)
+	check(true, "GameEvents 音效信号链路触发无错")
+	# 6. BGM 延迟合成后可用且循环配置正确
+	await get_tree().create_timer(0.5).timeout
+	check(SoundManager._samples.has("bgm"), "BGM 样本延迟合成完成")
+	var bgm = SoundManager._samples["bgm"]
+	check(bgm is AudioStreamWAV and bgm.loop_mode == AudioStreamWAV.LOOP_FORWARD,
+		"BGM 循环模式配置正确")
+
+
+# ---------------- T22 晶甲巨兽护甲壳（第 7 关 BOSS3） ----------------
+
+func _t_boss3_armor() -> void:
+	force_resume()
+	print("\n[T22] 晶甲巨兽护甲壳（减伤/破甲脆弱期/恢复）")
+	main._clear_world()
+	main.player.set("_fire_cd", 1e9)
+	var m: Monster = main.spawner.spawn_monster("boss3", main.player.position + Vector2(-350, -250))
+	m.speed = 0.0
+	check(is_equal_approx(m.max_hp, 1600.0) and is_equal_approx(m.armor_hp, 300.0),
+		"巨兽 HP1600 + 护甲 300 初始化")
+	# 有甲期：100 伤 → 本体仅承伤 40%
+	m.take_damage(100.0)
+	check(is_equal_approx(m.hp, 1600.0 - 40.0), "有甲期承伤 40%（100 伤 → 本体 -40）")
+	check(is_equal_approx(m.armor_hp, 200.0), "护甲池承受全额伤害（300→200）")
+	# 打穿护甲 → 脆弱期（全额承伤）
+	m.take_damage(250.0)
+	check(m.armor_hp == 0.0 and m.fragile_left > 0.0, "护甲破碎进入 10s 脆弱期")
+	var hp_at_break: float = m.hp
+	m.take_damage(100.0)
+	check(is_equal_approx(m.hp, hp_at_break - 100.0), "脆弱期全额承伤（无减伤）")
+	# 脆弱期结束 → 护甲恢复
+	m.fragile_left = 0.05
+	await tick(8)
+	check(is_equal_approx(m.armor_hp, 300.0), "脆弱期结束护甲恢复 300")
+	m.queue_free()
+
+
+# ---------------- T23 晶刺猎手分裂合并（第 5 关 BOSS2） ----------------
+
+func _t_boss2_split() -> void:
+	force_resume()
+	print("\n[T23] 猎手分裂：本体无敌+小体+限时合并")
+	main._clear_world()
+	main.player.set("_fire_cd", 1e9)
+	var m: Monster = main.spawner.spawn_monster("boss2", main.player.position + Vector2(0, -450))
+	check(is_equal_approx(m.max_hp, 800.0), "猎手 HP800 初始化")
+	m.take_damage(450.0)   # hp 350 < 50% → 下一物理帧触发分裂
+	await tick(4)
+	check(m.invulnerable, "HP<50% 触发分裂，本体进入无敌")
+	var children := 0
+	for c in main.get_tree().get_nodes_in_group("monsters"):
+		if c != m and c.is_split_child:
+			children += 1
+	check(children == 2, "分裂出 2 只小猎手（各 25% 血）")
+	var hp_now: float = m.hp
+	m.take_damage(500.0)
+	check(m.hp == hp_now, "分裂期本体免伤")
+	# 合并时限到 → 小体回归 + 本体至少恢复到 40% 血量
+	m.boss_action._split_timer = 0.05
+	await tick(8)
+	var left_children := 0
+	for c in main.get_tree().get_nodes_in_group("monsters"):
+		if c != m and c.is_split_child:
+			left_children += 1
+	check(left_children == 0 and not m.invulnerable, "合并时限到：小体回归，本体解除无敌")
+	check(m.hp >= 800.0 * 0.4, "合并后本体至少恢复到 40%% 血量（%.0f ≥ 320）" % m.hp)
+	m.queue_free()
+
+
+# ---------------- T24 晶洞主宰三阶段（第 10 关 BOSS5） ----------------
+
+func _t_boss5_phases() -> void:
+	force_resume()
+	print("\n[T24] 主宰三阶段切换（HP 驱动招式启用）")
+	main._clear_world()
+	main.player.set("_fire_cd", 1e9)
+	var m: Monster = main.spawner.spawn_monster("boss5", main.player.position + Vector2(-320, 280))
+	m.speed = 0.0
+	check(m.phase_index == 0, "初始阶段 1（fan+summon）")
+	check(not m.boss_action._action_enabled("rain"), "阶段 1 未启用晶雨")
+	m.take_damage(m.max_hp * 0.40)   # HP 60% → 阶段 2
+	await tick(4)
+	check(m.phase_index == 1, "HP≤66% 切换阶段 2")
+	check(m.boss_action._action_enabled("vortex_drop") and m.boss_action._action_enabled("quake"),
+		"阶段 2 启用 引力漩涡+震地波")
+	check(not m.boss_action._action_enabled("rain"), "阶段 2 仍未启用晶雨")
+	m.take_damage(m.max_hp * 0.35)   # HP 25% → 阶段 3 + 分裂触发
+	await tick(4)
+	check(m.phase_index == 2, "HP≤33% 切换阶段 3")
+	check(m.boss_action._action_enabled("rain"), "阶段 3 启用全屏晶雨")
+	check(m.invulnerable, "阶段 3 触发分裂分身（本体无敌）")
+	m.queue_free()
+
+
+# ---------------- T25 掉落补给（D1-D4） ----------------
+
+func _t_supply_drops() -> void:
+	force_resume()
+	print("\n[T25] 掉落补给（计数伪随机/残血保护/上限回收/满血血包）")
+	main._clear_world()
+	main.player.set("_fire_cd", 1e9)
+	main.player.position = Vector2(360, 900)
+	var dm: DropManager = main.drop_manager
+	# D1 概率触发：击杀 100 只小怪（5% ≈ 5 个 + pity 保底）→ 至少 1 个补给
+	var m0: Monster = main.spawner.spawn_monster("small", Vector2(60, 60))
+	m0.take_damage(99999.0)
+	for i in 99:
+		var m: Monster = main.spawner.spawn_monster("small", Vector2(60, 60))
+		m.take_damage(99999.0)
+	await tick(2)
+	var supplies: int = main.get_tree().get_nodes_in_group("supply_drops").size()
+	check(supplies >= 1, "D1 击杀计数触发补给掉落（100 杀掉 %d 个）" % supplies)
+	# D2 残血保护：HP<30% 血包权重 ×3（60%→约82%）
+	main.player.hp = main.player.max_hp * 0.2
+	var heal_count := 0
+	for i in 200:
+		if dm._roll_kind() == "heal":
+			heal_count += 1
+	check(heal_count >= 130, "D2 残血时血包占比显著提高（%d/200 = %.0f%%，权重×3）" % [heal_count, heal_count / 2.0])
+	main.player.heal(9999.0)
+	# D3 上限回收：强制再补 5 个 → 回收消化后场上 ≤ 8
+	for i in 5:
+		dm._spawn_supply(Vector2(120, 120), "heal")
+	await tick(3)   # 等待 queue_free 的最旧补给退出群组
+	check(main.get_tree().get_nodes_in_group("supply_drops").size() <= int(GameConfig.DROP_TABLE["max_drops"]),
+		"D3 场上补给 ≤ 上限 8（超出回收最旧，当前 %d）" % main.get_tree().get_nodes_in_group("supply_drops").size())
+	# D4 满血拾取血包：不回溢、补给正常消失
+	var hp_full: float = main.player.hp
+	dm._spawn_supply(main.player.position, "heal")
+	await tick(10)
+	check(main.player.hp == hp_full, "D4 满血拾取血包不回溢")
+	check(not main.get_tree().get_nodes_in_group("supply_drops").any(
+		func(s): return s.kind == "heal" and s.position.distance_to(main.player.position) < 5.0),
+		"D4 拾取后血包消失")
+	# 磁石窗口 / 护盾碎片层数
+	dm.trigger_magnet()
+	check(dm.magnet_active(), "磁石触发全屏磁吸窗口（6s）")
+	main.player.shield_charges = 0
+	check(main.player.add_shield_charge() and main.player.shield_charges == 1, "护盾碎片 +1 层")
+	main.player.shield_charges = 3
+	check(not main.player.add_shield_charge(), "护盾层数上限 3")
+	main.player.shield_charges = 0
+
+
+# ---------------- T26 弹种系统（W1-W3） ----------------
+
+func _t_weapons() -> void:
+	force_resume()
+	print("\n[T26] 弹种系统（三连发/巨型爆炸/弹种卡等级/临时弹种）")
+	main._clear_world()
+	main.player.set("_fire_cd", 1e9)
+	# W1 三连发：一次攻击 3 枚扇形 15°
+	var target: Monster = main.spawner.spawn_monster("small", main.player.position + Vector2(0, -300))
+	target.speed = 0.0
+	main.skills.acquire("triple")
+	main.player.sync_weapon_from_skills()
+	check(main.player.current_weapon() == "triple", "习得三连发弹种卡（替换默认弹种）")
+	var proj_before: int = main.projectile_layer.get_children().size()
+	main.player._fire(target)
+	var projs: int = main.projectile_layer.get_children().size() - proj_before
+	check(projs == 3, "W1 三连发一次发射 3 枚（实际 %d）" % projs)
+	# W3 弹种卡等级倍率 + 封顶
+	check(is_equal_approx(GameConfig.weapon_lv_mult(1), 1.0) \
+		and is_equal_approx(GameConfig.weapon_lv_mult(2), 1.15) \
+		and is_equal_approx(GameConfig.weapon_lv_mult(3), 1.3),
+		"W3 弹种卡等级倍率 Lv1/2/3 = 1.0/1.15/1.3")
+	main.skills.acquire("triple")
+	main.skills.acquire("triple")
+	check(main.skills.get_level("triple") == 3, "弹种卡升至 Lv3")
+	main.skills.acquire("triple")
+	check(main.skills.get_level("triple") == 3, "弹种卡封顶 3 级不再叠加")
+	# W2 巨型晶刺：直接命中致死 + 爆炸半径 24 范围伤害
+	var a: Monster = main.spawner.spawn_monster("small", main.player.position + Vector2(0, -280))
+	a.speed = 0.0
+	var p := Projectile.new()
+	p.setup(main.player.position, Vector2(0, -1) * 260.0, 50.0, 0.0)
+	p.set_weapon(0, 0.0, 24.0, Color("d24df5"))
+	main.projectile_layer.add_child(p)
+	await tick(90)
+	check(not is_instance_valid(a) or not a.alive, "W2 巨型晶刺直接命中目标")
+	# 爆炸范围：弹着点附近两只（22/18 距离）被半径 24 爆炸波及
+	var blast_a: Monster = main.spawner.spawn_monster("small", Vector2(500, 200))
+	var blast_b: Monster = main.spawner.spawn_monster("small", Vector2(518, 210))
+	blast_a.speed = 0.0
+	blast_b.speed = 0.0
+	var boom := Projectile.new()
+	boom.setup(Vector2(500, 200), Vector2.ZERO, 50.0, 0.0)
+	boom.set_weapon(0, 0.0, 24.0, Color("d24df5"))
+	main.projectile_layer.add_child(boom)
+	boom._explode(null)
+	await tick(3)
+	check(not is_instance_valid(blast_a) or not blast_a.alive, "W2 爆炸中心目标受伤")
+	check(not is_instance_valid(blast_b) or not blast_b.alive, "W2 爆炸半径 24 波及 20 距离邻近目标")
+	boom.queue_free()
+	# 弹种道具：临时弹种 8s，到期回落已习得弹种
+	main.player.equip_temp_weapon("spread")
+	check(main.player.current_weapon() == "spread", "弹种道具切换临时弹种")
+	main.player.temp_weapon_time = 0.05
+	await tick(8)
+	check(main.player.current_weapon() == "triple", "临时弹种到期回落已习得弹种")
+
+
+# ---------------- T27 升级弹窗优化（U1-U3） ----------------
+
+func _t_upgrade_optimize() -> void:
+	force_resume()
+	print("\n[T27] 升级弹窗优化（连升合并/自动升级/一键推荐）")
+	main._clear_world()
+	main.state = 1
+	# U1 连升合并：一次 3.5 级经验 → 只弹 1 次窗，选 1 项消化全部
+	main.level = 1
+	main.xp = 0.0
+	main.pending_levelups = 0
+	main._on_xp_gained(GameConfig.xp_to_next(main.level) * 3.5)
+	await tick(2)
+	check(main.state == 2 and main.pending_levelups == 2, "多级经验合并入账（pending=%d）" % main.pending_levelups)
+	main._on_upgrade_chosen("heal")
+	check(main.state == 1 and main.pending_levelups == 0, "U1 连升合并：单次弹窗选 1 项即消化全部")
+	# U3 一键推荐规则
+	main.player.hp = 20.0
+	check(main._pick_recommended(["aura", "heal", "dash"]) == "heal", "U3 规则①：HP<35% 推荐 heal")
+	main.player.heal(9999.0)
+	main.skills.levels["spread"] = 1
+	check(main._pick_recommended(["spread", "aura", "dash"]) == "spread", "U3 规则②：已有弹种卡推荐弹种强化")
+	main.skills.levels.erase("spread")
+	main.player.sync_weapon_from_skills()
+	# U2 自动升级：开关开 → 不弹窗自动学推荐
+	GameData.auto_upgrade = true
+	main._on_xp_gained(GameConfig.xp_to_next(main.level))
+	await tick(2)
+	check(main.state == 1 and main.pending_levelups == 0, "U2 自动升级不弹窗，等级自动消化")
+	GameData.auto_upgrade = false

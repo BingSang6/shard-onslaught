@@ -1,0 +1,16 @@
+# 截图与本地验证产物
+_shots/
+
+# Godot 编辑器与工具链（体积过大，不入库）
+tools/
+assets_generated/
+__pycache__/
+
+# 原始素材包（解包后最终素材已在 game/assets）
+*.zip
+
+# 美术参考图（任务书配图，非运行资源）
+images/
+
+# Godot 生成的导入缓存
+game/.godot/

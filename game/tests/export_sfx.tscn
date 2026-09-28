@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tests/export_sfx.gd" id="1"]
+
+[node name="ExportSfx" type="Node"]
+script = ExtResource("1")
