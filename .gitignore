@@ -14,3 +14,6 @@ images/
 
 # Godot 生成的导入缓存
 game/.godot/
+
+# Web/移动端构建产物
+game/build/
