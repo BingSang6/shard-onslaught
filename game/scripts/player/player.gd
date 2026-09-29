@@ -33,6 +33,7 @@ var weapon_id := "default"         # 已习得弹种（弹种卡；default=单�
 var weapon_lv := 1                 # 已习得弹种等级（1~3，伤害系数 ×1.0/1.15/1.3）
 var temp_weapon_id := ""           # 弹种道具临时弹种（8s，到期回落）
 var temp_weapon_time := 0.0
+var base_projectile_speed := 350.0 # 弹速进化后的基础弹速（V0.8 C：= PLAYER.projectile_speed + 永久增量）
 
 # ---- 护盾碎片（掉落补给：挡 1 次伤害，上限 3 层）----
 var shield_charges := 0
@@ -133,6 +134,8 @@ func setup(p_skills: Node, perm: Dictionary, p_projectile_layer: Node2D) -> void
 	base_attack = PLAYER_CFG["attack"] + perm.get("bonus_attack", 0.0)
 	base_fire_interval = PLAYER_CFG["fire_interval"]
 	pick_radius = PLAYER_CFG["pick_radius"] + perm.get("bonus_pick_radius", 0.0)
+	# V0.8 C：弹速进化（绝对增量，永久生效；_fire() 里对所有弹种统一附加）
+	base_projectile_speed = float(PLAYER_CFG["projectile_speed"]) + perm.get("bonus_bullet_speed", 0.0)
 	_iframe = 0.0
 	_dash_cd = 0.0
 	_dash_time = 0.0
@@ -276,7 +279,9 @@ func _fire(target: Node2D) -> void:
 			var t := (float(i) / float(count - 1)) - 0.5 if count > 1 else 0.0
 			dir = base_dir.rotated(t * spread)
 		var p := Projectile.new()
-		p.setup(position, dir * float(wcfg["speed"]), dmg, _current_knockback())
+		# V0.8 C：最终弹速 = 弹种基础速 + 弹速进化总增量（绝对增量，保留弹种手感差异）
+		var bullet_speed := float(wcfg["speed"]) + (base_projectile_speed - float(PLAYER_CFG["projectile_speed"]))
+		p.setup(position, dir * bullet_speed, dmg, _current_knockback())
 		p.set_weapon(int(wcfg["pierce"]), float(wcfg["homing"]), float(wcfg["blast_radius"]),
 			wcfg["color"])
 		var ricochet_lv := 0

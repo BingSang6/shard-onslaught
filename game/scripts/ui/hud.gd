@@ -18,6 +18,9 @@ var xp_bar: ProgressBar
 var level_label: Label
 var combo_label: Label
 var notice_label: Label
+var weapon_bar: HBoxContainer        # V0.8 A2：弹种进化提示条（色块图标 + 名称/秒数）
+var weapon_icon: ColorRect
+var weapon_label: Label
 var dash_button: Button
 var dash_cd_label: Label
 var levelup_button: Button                                  # 升华气泡（pending>0 时显示，点击打开三选一）
@@ -148,6 +151,19 @@ func _ready() -> void:
 	notice_label.modulate.a = 0.0
 	root.add_child(notice_label)
 
+	# ---- 弹种进化提示条（V0.8 A2：拾取弹种道具时短暂显示，图标=弹种色块）----
+	weapon_bar = HBoxContainer.new()
+	weapon_bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	weapon_bar.offset_top = 296
+	weapon_bar.add_theme_constant_override("separation", 10)
+	weapon_bar.modulate.a = 0.0
+	root.add_child(weapon_bar)
+	weapon_icon = ColorRect.new()
+	weapon_icon.custom_minimum_size = Vector2(24, 24)
+	weapon_bar.add_child(weapon_icon)
+	weapon_label = UIStyle.make_label("", 24, Color(0.75, 1.0, 0.95))
+	weapon_bar.add_child(weapon_label)
+
 	# ---- BOSS 血条（顶部下方居中，仅 BOSS 关显示；同步避开刘海安全区）----
 	var boss_box := VBoxContainer.new()
 	boss_box.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
@@ -212,6 +228,8 @@ func _ready() -> void:
 	GameEvents.chain_triggered.connect(_on_chain)
 	GameEvents.player_damaged.connect(_on_hp_changed)
 	GameEvents.player_healed.connect(_on_hp_changed)
+	GameEvents.supply_picked.connect(_on_supply_picked)       # V0.8 A2：拾取反馈
+	GameEvents.airdrop_arrived.connect(func(): show_notice("补给空投 已抵达"))   # V0.8 A1
 
 
 func bind_player(p_player: Node2D) -> void:
@@ -325,6 +343,31 @@ func show_notice(text: String) -> void:
 	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
 	tw.tween_property(notice_label, "scale", Vector2.ONE, 0.2)
 	tw.parallel().tween_property(notice_label, "modulate:a", 0.0, 2.2).set_delay(0.8)
+
+
+## 补给拾取反馈（V0.8 A2：弹种进化条 / 生命回复 / 护盾 / 磁吸短提示）
+func _on_supply_picked(kind: String, value: float) -> void:
+	match kind:
+		"weapon":
+			var wid: String = _player.temp_weapon_id if _player != null else ""
+			var wcfg: Dictionary = GameConfig.WEAPON_TYPES.get(wid, {})
+			weapon_icon.color = wcfg.get("color", Color.WHITE)
+			weapon_label.text = "弹种进化：%s %.0fs" % [String(wcfg.get("name", "未知弹种")), value]
+			weapon_label.add_theme_color_override("font_color", wcfg.get("color", Color.WHITE))
+			weapon_bar.modulate.a = 1.0
+			weapon_bar.scale = Vector2(1.2, 1.2)
+			var tw := create_tween()
+			tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+			tw.tween_property(weapon_bar, "scale", Vector2.ONE, 0.18)
+			tw.parallel().tween_property(weapon_bar, "modulate:a", 0.0, 0.6).set_delay(1.4)
+			SoundManager.play("heal", -2.0, 1.3)          # 复用 heal 音升调 = 进化感
+		"heal":
+			if value > 0.0:
+				show_notice("生命回复 +%.0f" % value)
+		"shield":
+			show_notice("护盾 +1（%d/%d）" % [int(value), int(GameConfig.DROP_TABLE["shield_max"])])
+		"magnet":
+			show_notice("全屏磁吸 %.0fs" % value)
 
 
 func set_xp(level: int, xp: float, xp_next: float) -> void:

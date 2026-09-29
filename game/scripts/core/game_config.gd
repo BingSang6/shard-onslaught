@@ -6,6 +6,7 @@ class_name GameConfig
 const RUN_TIME := 180.0                     # 单局倒计时（秒），存活到 0 即通关
 const ARENA_SIZE := Vector2(1000, 1800)     # 晶洞场地尺寸（世界坐标）
 const MAX_MONSTERS := 60                    # 同屏怪物上限（WebGL 性能保护）
+const MAX_MONSTERS_ELITE := 45              # 精英关同屏上限（V0.8 B3：密度硬兜底防满屏）
 const MAX_CHAIN := 8                        # 连锁爆炸最大层数（防无限递归卡死）
 const SPAWN_MIN_DIST := 280.0               # 怪物生成点离玩家的最小距离（防出生贴脸）
 
@@ -55,19 +56,39 @@ const BOSS_SPAWN_TIME := 120.0
 # ================= 波次闯关制（《波次闯关制·BOSS设计任务书》）=================
 # 10 关：普通波/精英波沿用刷怪导演曲线（mix 控制出怪比例），BOSS 关暂停常规刷怪单刷 BOSS
 const WAVE_TABLE := [
-	{"wave": 1,  "type": "normal", "duration": 30.0, "mix": {"small": 1.0}},
-	{"wave": 2,  "type": "elite",  "duration": 30.0, "mix": {"small": 0.35, "big": 0.65}},   # 真机反馈：全大兽开局顶不住 → 掺小怪渐进
+	# min_interval=刷怪间隔下限（峰值兜底防满屏）；big_cap=大兽同屏上限（满额转小怪）
+	{"wave": 1,  "type": "normal", "duration": 30.0, "mix": {"small": 1.0}, "min_interval": 0.55, "big_cap": 0},
+	# V0.8 任务书 B2：真机反馈"满屏堵路"根因关 → 大兽 65%→40% 穿插 + 峰值兜底 0.50s + 大兽同屏 ≤8
+	{"wave": 2,  "type": "elite",  "duration": 30.0, "mix": {"small": 0.60, "big": 0.40}, "min_interval": 0.50, "big_cap": 8},
 	{"wave": 3,  "type": "boss",   "duration": 60.0, "boss_id": "boss1"},
-	{"wave": 4,  "type": "elite",  "duration": 35.0, "mix": {"small": 0.5, "big": 0.5}, "airdrop": true},
+	{"wave": 4,  "type": "elite",  "duration": 35.0, "mix": {"small": 0.5, "big": 0.5}, "min_interval": 0.45, "big_cap": 10, "airdrop": true},
 	{"wave": 5,  "type": "boss",   "duration": 60.0, "boss_id": "boss2"},
-	{"wave": 6,  "type": "elite",  "duration": 35.0, "mix": {"small": 0.4, "big": 0.6}, "airdrop": true},
+	{"wave": 6,  "type": "elite",  "duration": 35.0, "mix": {"small": 0.45, "big": 0.55}, "min_interval": 0.42, "big_cap": 12, "airdrop": true},
 	{"wave": 7,  "type": "boss",   "duration": 60.0, "boss_id": "boss3"},
-	{"wave": 8,  "type": "elite",  "duration": 40.0, "mix": {"small": 0.3, "big": 0.7}, "airdrop": true},
+	{"wave": 8,  "type": "elite",  "duration": 40.0, "mix": {"small": 0.35, "big": 0.65}, "min_interval": 0.40, "big_cap": 14, "airdrop": true},
 	{"wave": 9,  "type": "boss",   "duration": 60.0, "boss_id": "boss4"},
 	{"wave": 10, "type": "boss",   "duration": 90.0, "boss_id": "boss5"},
 ]
 const WAVE_TRANSITION := 3.0   # 关间过渡秒数（补给空投窗口）
 const WAVE_COUNT := 10         # 总关数（通关判定）
+
+# ---- 关内周期空投（V0.8 任务书模块A：普通/精英关进行中按间隔投放；BOSS 关 1 次）----
+const AIRDROP_TABLE := {
+	"normal_interval": 20.0,        # 普通波空投间隔（秒）
+	"elite_interval": 18.0,         # 精英波空投间隔（秒）
+	"boss_count": 1,                # BOSS 关空投次数
+	"boss_delay": 3.0,              # BOSS 关开场多久投放（秒）
+	"drop_count": [1, 1, 2, 2],     # 关内每次空投数量池（60% 1 个 / 40% 2 个）
+	"min_dist": 320.0,              # 关内落点距玩家（需走位获取，不贴脸白送）
+	"max_dist": 420.0,
+	"lifetime": 20.0,               # 空投补给存在秒数（与 SupplyDrop 默认一致，过期消失）
+	"warn_time": 0.8,               # 落点光圈预警秒数（光圈结束后补给实体出现）
+	"weights": {"heal": 0.35, "weapon": 0.35, "magnet": 0.20, "shield": 0.10},      # 关内空投池
+	"transition_count": [2, 2, 3, 3],   # 关间过渡空投数量（2~3 个，喘息窗口给足补给感）
+	"transition_weights": {"heal": 0.45, "weapon": 0.30, "magnet": 0.15, "shield": 0.10},
+	"transition_min_dist": 140.0,   # 关间落点（过渡期无怪，贴脸方便拾取）
+	"transition_max_dist": 280.0,
+}
 
 # ---- 5 BOSS（数值严格按任务书第二节；TTK 校准信号：<15s 血量×1.3，>50s ×0.75）----
 # 招式 id 语义（boss_action.gd 消费）：fan=扇形晶刺 / pulse=扩散冲击环 / summon=召唤 /
@@ -214,6 +235,12 @@ const PERM_UPGRADES := {
 		"name": "开局技能", "desc": "每局开始时获得 1 级随机技能（一次性解锁）",
 		"max_lv": 1, "base_cost": 120, "cost_step": 0, "bonus_per_lv": 0.0,
 		"color": Color("c79bff"), "sides": 5,
+	},
+	# V0.8 任务书模块C：弹速进化（绝对增量统一附加到所有弹种，保留弹种手感差异）
+	"bullet_speed": {
+		"name": "弹速进化", "desc": "每级 晶刺飞行速度 +40",
+		"max_lv": 5, "base_cost": 35, "cost_step": 20, "bonus_per_lv": 40.0,
+		"color": Color("35e6ff"), "sides": 4,
 	},
 }
 

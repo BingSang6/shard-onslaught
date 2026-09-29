@@ -28,7 +28,7 @@ func _ready() -> void:
 
 ## 重置存档相关状态（不写盘——只在内存中隔离本测试进程）
 func _reset_game_data() -> void:
-	GameData.permanent_upgrades = {"hp": 0, "attack": 0, "pick_range": 0, "start_skill": 0}
+	GameData.permanent_upgrades = {"hp": 0, "attack": 0, "pick_range": 0, "start_skill": 0, "bullet_speed": 0}
 	GameData.unlocked_monsters = []
 	GameData.crystal_core = 0
 	GameData.max_wave = 0
@@ -62,6 +62,8 @@ func force_resume() -> void:
 	main.state = 1
 	main.xp = 0.0
 	main.pending_levelups = 0
+	main.player.temp_weapon_id = ""     # 前序测试拾取弹种补给的 8s 临时弹种可能跨用例残留
+	main.player.temp_weapon_time = 0.0
 	main.get_tree().paused = false
 	for d in main.get_tree().get_nodes_in_group("drops"):
 		d.queue_free()
@@ -110,6 +112,11 @@ func _run_all() -> void:
 	await _t_weapons()
 	await _t_upgrade_optimize()
 	await _t_sprite_scale()
+	await _t_airdrop_cycle()
+	await _t_airdrop_pickup()
+	await _t_wave2_density()
+	await _t_wave_local_reset()
+	await _t_bullet_speed_evolution()
 
 
 # ---------------- T1 状态机与刷怪 ----------------
@@ -748,6 +755,10 @@ func _t_weapons() -> void:
 	# W1 三连发：一次攻击 3 枚扇形 15°
 	var target: Monster = main.spawner.spawn_monster("small", main.player.position + Vector2(0, -300))
 	target.speed = 0.0
+	# 隔离：force_resume 自动推荐可能已学其他弹种卡（随机池），清零后仅保留三连发
+	for wid in GameConfig.WEAPON_TYPES.keys():
+		if wid != "default":
+			main.skills.levels[wid] = 0
 	main.skills.acquire("triple")
 	main.player.sync_weapon_from_skills()
 	check(main.player.current_weapon() == "triple", "习得三连发弹种卡（替换默认弹种）")
@@ -847,6 +858,151 @@ func _t_sprite_scale() -> void:
 	var mdraw: float = m._poly.scale.x * m._poly.texture.get_width()
 	var mwant: float = 26.0 * 2.0 / GameConfig.ASSET_BODY_DIAMETER * GameConfig.ASSET_SRC_DIAMETER
 	check(absf(mdraw - mwant) < 1.0, "大晶兽绘制直径 %.0fpx 与基准 %.0fpx 一致" % [mdraw, mwant])
+
+
+# ---------------- T29-T33 补给空投 + 刷怪节奏 + 弹速进化（V0.8 任务书）----------------
+
+func _t_airdrop_cycle() -> void:
+	force_resume()
+	print("\n[T29] 关内周期空投（精英关 18s 触发/空投池/落点距离/过期消失）")
+	main._clear_world()
+	for s in main.get_tree().get_nodes_in_group("supply_drops"):   # _clear_world 不清补给，手动隔离
+		s.queue_free()
+	main.drop_manager.magnet_until = -1.0   # 前序测试拾取磁石的 6s 吸附窗口泄漏会拉走空投落点
+	main.state = 1
+	main.player.set("_fire_cd", 1e9)
+	main.player.position = Vector2(360, 900)
+	main.player.hp = main.player.max_hp
+	var arrived: Array = []                       # lambda 按值捕获局部变量，计数须用引用容器
+	var fn := func() -> void: arrived.append(1)
+	GameEvents.airdrop_arrived.connect(fn)
+	# 进入第 2 关（精英），手动泵 wave_manager 18.2s（0.02 步进；略超 18s 规避浮点边界）
+	main.wave_manager._begin_wave(2)
+	main.spawner.enabled = false     # T29 只测空投：隔离真实帧刷怪→碰撞击退导致玩家位移干扰落点断言
+	for i in 910:
+		main.wave_manager.update(0.02)
+	check(arrived.size() >= 1, "精英关 18s 内触发周期空投（%d 次）" % arrived.size())
+	check(main.wave_manager._airdrop_timer > 0.0 and main.wave_manager._airdrop_timer <= 18.0,
+		"空投后计时器重置为周期间隔（%.1fs）" % main.wave_manager._airdrop_timer)
+	# 预警光圈 0.8s 后补给实体落地（create_timer 走真实时钟，等 ~1.2s）
+	await tick(70)
+	var supplies: Array = main.get_tree().get_nodes_in_group("supply_drops")
+	check(supplies.size() >= 1, "预警 0.8s 后补给实体出现（%d 个）" % supplies.size())
+	if supplies.size() > 0:
+		check(supplies[0].kind in ["heal", "weapon", "magnet", "shield"],
+			"空投内容来自空投池（首个=%s）" % supplies[0].kind)
+		check(supplies[0].position.distance_to(main.player.position) >= 280.0,
+			"空投落点 320~420px 远离玩家（边界钳制后 %.0f 仍需走位）" % supplies[0].position.distance_to(main.player.position))
+		# 过期消失：同一 lifetime 代码路径，缩短验证
+		var s0 = supplies[0]
+		s0.lifetime = 0.05
+		await tick(5)
+		check(not is_instance_valid(s0), "空投补给到点自动消失（lifetime 到期）")
+	GameEvents.airdrop_arrived.disconnect(fn)
+
+
+func _t_airdrop_pickup() -> void:
+	force_resume()
+	print("\n[T30] 空投拾取（弹种 8s 回落/血包回复/拾取信号）")
+	main._clear_world()
+	main.player.position = Vector2(360, 900)
+	main.player.set("_fire_cd", 1e9)
+	var picked: Array = []
+	var fn := func(k, v): picked.append([k, v])
+	GameEvents.supply_picked.connect(fn)
+	var dm: DropManager = main.drop_manager
+	# 拾取弹种道具 → 临时弹种 + 信号
+	main.player.temp_weapon_id = ""
+	main.player.temp_weapon_time = 0.0
+	dm._spawn_supply(main.player.position, "weapon")
+	await tick(10)
+	check(main.player.temp_weapon_id != "" and GameConfig.WEAPON_TYPES.has(main.player.temp_weapon_id),
+		"拾取弹种道具 → 临时弹种「%s」" % main.player.temp_weapon_id)
+	check(picked.any(func(p): return p[0] == "weapon"), "supply_picked（weapon）信号已广播")
+	main.player.temp_weapon_time = 0.05
+	await tick(10)
+	check(main.player.temp_weapon_id == "", "临时弹种 8s 到期回落默认")
+	# 血包：残血 +20 + 信号
+	main.player.hp = 50.0
+	dm._spawn_supply(main.player.position, "heal")
+	await tick(10)
+	check(is_equal_approx(main.player.hp, 70.0), "拾取血包 HP +20（50 → %.0f）" % main.player.hp)
+	check(picked.any(func(p): return p[0] == "heal" and p[1] > 0.0), "supply_picked（heal +N）信号已广播")
+	GameEvents.supply_picked.disconnect(fn)
+
+
+func _t_wave2_density() -> void:
+	force_resume()
+	print("\n[T31] 第二关密度（30s 生成数/大兽同屏上限）")
+	main._clear_world()
+	main.player.position = Vector2(360, 900)
+	main.player.set("_fire_cd", 1e9)
+	main.player.hp = main.player.max_hp
+	main.wave_manager._begin_wave(2)
+	seed(20260929)
+	for i in 1500:                            # 手动泵 30s（0.02 步进）
+		main.spawner._physics_process(0.02)
+	await tick(2)
+	var monsters: Array = main.get_tree().get_nodes_in_group("monsters")
+	var bigs := 0
+	for m in monsters:
+		if m.monster_id == "big":
+			bigs += 1
+	check(monsters.size() <= 45, "第 2 关 30s 生成 %d 只 ≤ 45（V0.7 约 70）" % monsters.size())
+	check(bigs <= int(GameConfig.WAVE_TABLE[1]["big_cap"]),
+		"大兽同屏 %d ≤ 上限 %d（满额转小怪）" % [bigs, int(GameConfig.WAVE_TABLE[1]["big_cap"])])
+	check(main.spawner.max_monsters == GameConfig.MAX_MONSTERS_ELITE, "精英关同屏硬上限 45 已下发")
+
+
+func _t_wave_local_reset() -> void:
+	force_resume()
+	print("\n[T32] 刷怪按本关进度重置（跨关不继承）")
+	main._clear_world()
+	main.player.position = Vector2(360, 900)
+	main.player.set("_fire_cd", 1e9)
+	main.wave_manager._begin_wave(1)
+	for i in 1450:                            # 第 1 关推进 29s，interval 收紧至峰值下限
+		main.spawner._physics_process(0.02)
+	var late: float = main.spawner._current_interval()
+	check(absf(late - float(GameConfig.WAVE_TABLE[0]["min_interval"])) < 0.01,
+		"第 1 关末 interval 收紧至峰值下限 %.2fs" % late)
+	main.wave_manager._begin_wave(2)          # 进第 2 关 → 本关重置
+	var fresh: float = main.spawner._current_interval()
+	check(absf(fresh - 1.15) < 0.05, "第 2 关开局 interval 重置 ≈1.15s（实际 %.2fs，不继承上一关收紧值）" % fresh)
+	check(main.spawner.wave_local == 0.0
+		and main.spawner.wave_min_interval == float(GameConfig.WAVE_TABLE[1]["min_interval"]),
+		"本关计时清零 + 峰值下限 0.50s 下发")
+
+
+func _t_bullet_speed_evolution() -> void:
+	force_resume()
+	print("\n[T33] 弹速进化（永久强化 Lv1/Lv5 + 弹种绝对增量）")
+	main._clear_world()
+	main.state = 1
+	main.player.position = Vector2(360, 900)
+	# C2 基础弹速：350 + 40×等级（Lv1=390 / Lv5=550）
+	GameData.permanent_upgrades["bullet_speed"] = 1
+	main.player.setup(main.skills, GameData.perm_bonuses(), main.projectile_layer)
+	check(is_equal_approx(main.player.base_projectile_speed, 390.0), "Lv1 基础弹速 390")
+	GameData.permanent_upgrades["bullet_speed"] = 5
+	main.player.setup(main.skills, GameData.perm_bonuses(), main.projectile_layer)
+	check(is_equal_approx(main.player.base_projectile_speed, 550.0), "Lv5 基础弹速 550")
+	# C2 绝对增量对弹种生效：三连发 320 + 200 = 520（发射实测）
+	main.player.weapon_id = "triple"
+	main.player.weapon_lv = 1
+	var dummy := Node2D.new()
+	main.projectile_layer.add_child(dummy)
+	dummy.position = main.player.position + Vector2(300, 0)
+	main.player._fire(dummy)
+	await tick(2)
+	var projs: Array = main.projectile_layer.get_children().filter(func(c): return c is Projectile)
+	check(projs.size() == 3, "三连发发射 3 枚")
+	if projs.size() > 0:
+		check(absf(projs[0].velocity.length() - 520.0) < 0.5,
+			"三连发弹速 = 320 + 增量200 = 520（绝对增量生效，实测 %.0f）" % projs[0].velocity.length())
+	dummy.queue_free()
+	GameData.permanent_upgrades["bullet_speed"] = 0   # 还原，防污染后续用例
+	main.player.setup(main.skills, GameData.perm_bonuses(), main.projectile_layer)
 	GameData.auto_upgrade = false
 	# U4 手动气泡信号链：hud.levelup_pressed → 打开三选一
 	main._on_xp_gained(GameConfig.xp_to_next(main.level))

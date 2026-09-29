@@ -73,6 +73,27 @@ func _run_sequence() -> void:
 	await get_tree().create_timer(0.5, true).timeout
 	await _shot("04b_hp_low_shield")
 
+	# 4c. V0.8 第 2 关节奏：虚拟推进 25s（大兽 40% 穿刺 + 同屏硬上限 45 + 大兽≤8，对比 V0.7 满屏堵路）
+	main.wave_manager._begin_wave(2)
+	for i in 1250:
+		main.spawner._physics_process(0.02)
+	await get_tree().create_timer(1.5, true).timeout   # 真实帧让怪物散开走位
+	await _shot("04c_wave2_density")
+
+	# 4d. V0.8 关内周期空投：落点光圈预警 0.8s（绿色光圈脉动 + "补给空投 已抵达"弹字）
+	main.wave_manager._airdrop_timer = 0.05
+	for i in 3:
+		main.wave_manager.update(0.02)
+	await get_tree().create_timer(0.35, true).timeout  # 光圈脉动中段
+	await _shot("04d_airdrop_halo")
+	await get_tree().create_timer(1.0, true).timeout   # 光圈结束 → 补给实体落地
+	await _shot("04e_airdrop_landed")
+
+	# 4f. V0.8 弹种进化反馈：拾取弹种道具 → HUD 顶部弹种条（色块 + 名称 + 剩余秒数）
+	main.drop_manager._spawn_supply(main.player.position, "weapon")
+	await get_tree().create_timer(0.6, true).timeout
+	await _shot("04f_weapon_evolution_bar")
+
 	# 5. 升华气泡：连升 2 级不打断战斗，右下角气泡呼吸提示 → 点击打开三选一（推荐紫边）
 	main.skills.acquire("shatter_blast")
 	main.skills.acquire("triple")          # 已有弹种卡 → 推荐规则②强化弹种

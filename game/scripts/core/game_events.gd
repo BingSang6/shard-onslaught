@@ -12,6 +12,9 @@ signal boss_defeated                        # BOSS 被击败
 signal shot_fired                           # 玩家发射晶刺（阶段4：音效）
 signal projectile_hit                       # 晶刺命中怪物（阶段4：音效）
 signal boss_spawned                         # BOSS 出场（阶段4：音效）
+# ---- 补给（V0.8 任务书模块A）----
+signal supply_picked(kind: String, value: float)   # 补给拾取（HUD 反馈：弹种进化条/回复/护盾/磁吸）
+signal airdrop_arrived                      # 空投落点已生成（HUD 弹字"补给空投 已抵达"）
 
 # ---- 流程 ----
 signal run_started                          # 一局开始

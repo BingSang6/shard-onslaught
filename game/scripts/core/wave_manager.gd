@@ -25,6 +25,10 @@ var player: Node2D = null
 
 var _boss: Monster = null
 var _transition_left := 0.0
+# ---- 关内周期空投（V0.8 A1：普通/精英按间隔投放；BOSS 关限 boss_count 次）----
+var _airdrop_timer := 0.0            # 距下次空投秒数（0 = 本关不再投）
+var _airdrop_interval := 0.0         # 周期间隔（BOSS 关 0=限次模式）
+var _airdrop_left := -1              # 剩余次数（-1 = 周期模式无限）
 
 
 ## 开局重置并立即进入第 1 关
@@ -52,6 +56,7 @@ func update(delta: float) -> void:
 		State.RUNNING:
 			run_elapsed += delta
 			wave_time_left -= delta
+			_tick_inwave_airdrop(delta)
 			if _is_boss_wave():
 				if _boss_defeated():
 					_clear_wave()
@@ -99,10 +104,27 @@ func _begin_wave(wave: int) -> void:
 		spawner.stop()                        # BOSS 关：暂停常规刷怪
 		spawner.set_wave_mix({})
 		_spawn_boss(String(cfg.get("boss_id", "boss1")))
+		# V0.8 A1：BOSS 关空投 boss_count 次（开场 boss_delay 秒后投放）
+		_airdrop_interval = 0.0
+		_airdrop_left = int(GameConfig.AIRDROP_TABLE["boss_count"])
+		_airdrop_timer = float(GameConfig.AIRDROP_TABLE["boss_delay"])
 	else:
 		_boss = null
 		spawner.set_wave_mix(cfg.get("mix", {}))
 		spawner.enabled = true                # 普通波/精英波：沿用刷怪导演
+		# V0.8 B1/B3：刷怪强度按本关进度重置 + 峰值/大兽/生成率三重兜底；精英关同屏 45
+		var is_elite: bool = cfg.get("type", "normal") == "elite"
+		spawner.max_monsters = GameConfig.MAX_MONSTERS_ELITE if is_elite else GameConfig.MAX_MONSTERS
+		spawner.reset_wave(
+			float(cfg.get("duration", 30.0)),
+			float(cfg.get("min_interval", 0.55)),
+			int(cfg.get("big_cap", -1)),
+			3.0 if is_elite else 2.2)
+		# V0.8 A1：关内周期空投（普通 20s / 精英 18s，首个间隔即投放一次）
+		_airdrop_interval = float(GameConfig.AIRDROP_TABLE["elite_interval"] if is_elite
+				else GameConfig.AIRDROP_TABLE["normal_interval"])
+		_airdrop_left = -1
+		_airdrop_timer = _airdrop_interval
 	wave_started.emit(wave, cfg)
 
 
@@ -143,7 +165,23 @@ func _despawn_boss() -> void:
 
 func _airdrop() -> void:
 	if drop_manager != null and drop_manager.has_method("airdrop"):
-		drop_manager.airdrop()
+		drop_manager.airdrop(true, true)      # V0.8 A3：关间过渡走空投池（近落点+2~3个）
+
+
+## 关内周期空投推进（V0.8 A1；由 update() RUNNING 分支调用）
+func _tick_inwave_airdrop(delta: float) -> void:
+	if drop_manager == null or _airdrop_timer <= 0.0:
+		return
+	_airdrop_timer -= delta
+	if _airdrop_timer > 0.0:
+		return
+	drop_manager.airdrop(true, false)         # 关内空投池（远落点 + 0.8s 光圈预警）
+	if _airdrop_left > 0:                     # 限次模式（BOSS 关）
+		_airdrop_left -= 1
+		if _airdrop_left <= 0:
+			_airdrop_timer = 0.0
+	else:                                     # 周期模式（普通/精英关）
+		_airdrop_timer = _airdrop_interval
 
 
 ## BOSS 出生点：场地内随机取离玩家 ≥380 的点，多次失败退化最远角

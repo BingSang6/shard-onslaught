@@ -2,8 +2,10 @@ class_name DropManager
 extends Node2D
 ## 掉落管理器（晶粒 + 战术补给两路）：
 ## 晶粒：怪物死亡掉经验晶粒；超限时最旧的自动飞向玩家回收（防 WebGL 堆积）。
-## 补给（《战斗循环增强任务书》§2）：计数伪随机触发 + 类型权重 + 残血保护 +
-## 上限回收（8）+ 稀有保底（30 击杀）+ BOSS 必掉 + 关间空投（wave_manager 调用）。
+## 补给（《战斗循环增强任务书》§2 + V0.8 空投增强）：计数伪随机触发 + 类型权重 + 残血保护 +
+## 上限回收（8）+ 稀有保底（30 击杀）+ BOSS 必掉 + 关间空投 + 关内周期空投（wave_manager 调用）。
+
+const Halo = preload("res://scripts/effects/halo.gd")
 
 var player: Node2D = null
 
@@ -101,12 +103,71 @@ func _spawn_supply(pos: Vector2, kind: String) -> void:
 	s.setup(pos, kind, player)
 
 
-## 关间补给空投（wave_manager 过渡期调用）：1-2 个血包/磁石落在玩家附近
-func airdrop() -> void:
+## 补给空投（V0.8 任务书模块A）：
+## - use_pool=true + near=false：关内周期空投——空投池权重、落点 320~420px、0.8s 落点光圈预警
+## - use_pool=true + near=true ：关间过渡空投——过渡权重（heal 为主）、落点 140~280px、2~3 个、无预警
+## - use_pool=false：旧关间逻辑保留（1~2 个血包/磁石，兼容旧调用）
+func airdrop(use_pool := true, near := false) -> void:
 	if player == null:
 		return
-	var count := 1 + (randi() % 2)
+	if not use_pool:
+		var legacy_count := 1 + (randi() % 2)
+		for i in legacy_count:
+			var c: Vector2 = player.position + Vector2.from_angle(randf() * TAU) * randf_range(140.0, 280.0)
+			c = c.clamp(Vector2(60, 60), GameConfig.ARENA_SIZE - Vector2(60, 60))
+			_spawn_supply(c, "heal" if randf() < 0.5 else "magnet")
+		return
+
+	var t: Dictionary = GameConfig.AIRDROP_TABLE
+	var weights: Dictionary = t["transition_weights"] if near else t["weights"]
+	var count_pool: Array = t["transition_count"] if near else t["drop_count"]
+	var dist_min := float(t["transition_min_dist"] if near else t["min_dist"])
+	var dist_max := float(t["transition_max_dist"] if near else t["max_dist"])
+	var count: int = count_pool[randi() % count_pool.size()]
 	for i in count:
-		var center: Vector2 = player.position + Vector2.from_angle(randf() * TAU) * randf_range(140.0, 280.0)
+		var center: Vector2 = player.position + Vector2.from_angle(randf() * TAU) * randf_range(dist_min, dist_max)
+		# 多个补给沿落点左右散开 ±45px（任务书 A1），保持各自拾取间距
+		if i % 2 == 1:
+			center += Vector2(45.0, 0.0)
+		elif i > 0:
+			center += Vector2(-45.0, 0.0)
 		center = center.clamp(Vector2(60, 60), GameConfig.ARENA_SIZE - Vector2(60, 60))
-		_spawn_supply(center, "heal" if randf() < 0.5 else "magnet")
+		if near:
+			_spawn_supply(center, _roll_from_weights(weights))        # 过渡期无怪：直接落地方便拾取
+		else:
+			_spawn_airdrop_marker(center, _roll_from_weights(weights))  # 关内：先光圈预警 0.8s 再落地
+	GameEvents.airdrop_arrived.emit()
+
+
+## 权重表随机取键（空投池/过渡池共用）
+func _roll_from_weights(weights: Dictionary) -> String:
+	var total := 0.0
+	for w in weights.values():
+		total += float(w)
+	var roll := randf() * total
+	for k in weights:
+		roll -= float(weights[k])
+		if roll <= 0.0:
+			return String(k)
+	return String(weights.keys()[0])
+
+
+## 落点预警光圈（0.8s 缩放脉动）→ 到点生成补给实体（V0.8 A1："天上要掉东西"的期待感）
+func _spawn_airdrop_marker(pos: Vector2, kind: String) -> void:
+	var marker := Node2D.new()
+	add_child(marker)
+	marker.position = pos
+	var halo: Node2D = Halo.create(90.0, Color(0.55, 1.0, 0.75), 1.4)
+	marker.add_child(halo)
+	halo.scale = Vector2(1.3, 1.3)
+	var tw := marker.create_tween()
+	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	tw.tween_property(halo, "scale", Vector2(0.8, 0.8), 0.4).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(halo, "scale", Vector2(1.25, 1.25), 0.4).set_trans(Tween.TRANS_SINE)
+	# 预警结束：光圈退场 + 补给实体出现（真实时钟，升级暂停期间照常落地）
+	var warn := get_tree().create_timer(float(GameConfig.AIRDROP_TABLE["warn_time"]))
+	warn.timeout.connect(func() -> void:
+		if is_instance_valid(marker):
+			marker.queue_free()
+		if player != null:
+			_spawn_supply(pos, kind))

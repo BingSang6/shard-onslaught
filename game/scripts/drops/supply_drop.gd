@@ -81,18 +81,23 @@ func _physics_process(delta: float) -> void:
 		queue_free()
 
 
-## 拾取效果（数值单点在 DROP_TABLE）
+## 拾取效果（数值单点在 DROP_TABLE；V0.8 A2：各分支广播 supply_picked 供 HUD 反馈）
 func _apply_effect() -> void:
 	match kind:
 		"heal":
+			var before := _player.hp
 			_player.heal(float(GameConfig.DROP_TABLE["heal_amount"]))   # heal() 自带上限截断（满血=无效果）
+			GameEvents.supply_picked.emit("heal", maxf(0.0, _player.hp - before))
 		"magnet":
 			var dm := get_parent()
 			if dm != null and dm.has_method("trigger_magnet"):
 				dm.trigger_magnet()
+			GameEvents.supply_picked.emit("magnet", float(GameConfig.DROP_TABLE["magnet_duration"]))
 		"shield":
 			_player.add_shield_charge()          # 满 3 层时无效（正常消失）
+			GameEvents.supply_picked.emit("shield", float(_player.shield_charges))
 		"weapon":
 			var pool: Array = GameConfig.WEAPON_TYPES.keys()
 			pool.erase("default")
 			_player.equip_temp_weapon(pool[randi() % pool.size()])
+			GameEvents.supply_picked.emit("weapon", float(GameConfig.DROP_TABLE["weapon_duration"]))

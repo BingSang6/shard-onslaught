@@ -7,7 +7,7 @@ extends Node
 const SAVE_PATH := "user://save.json"
 
 var crystal_core: int = 0                    # 晶核（永久货币）
-var permanent_upgrades := {"hp": 0, "attack": 0, "pick_range": 0, "start_skill": 0}
+var permanent_upgrades := {"hp": 0, "attack": 0, "pick_range": 0, "start_skill": 0, "bullet_speed": 0}
 var unlocked_monsters: Array = []            # 图鉴：已遭遇的怪物类型 id
 var muted := false                           # 静音开关（阶段4：SoundManager 读取）
 var max_wave := 0                            # 波次制：历史最高到达关卡（1~10）
@@ -94,6 +94,7 @@ func perm_bonuses() -> Dictionary:
 		"bonus_hp": float(GameConfig.PERM_UPGRADES["hp"]["bonus_per_lv"]) * float(permanent_upgrades["hp"]),
 		"bonus_attack": float(GameConfig.PERM_UPGRADES["attack"]["bonus_per_lv"]) * float(permanent_upgrades["attack"]),
 		"bonus_pick_radius": float(GameConfig.PERM_UPGRADES["pick_range"]["bonus_per_lv"]) * float(permanent_upgrades["pick_range"]),
+		"bonus_bullet_speed": float(GameConfig.PERM_UPGRADES["bullet_speed"]["bonus_per_lv"]) * float(permanent_upgrades["bullet_speed"]),   # V0.8 C：弹速进化总增量
 		"start_skill": permanent_upgrades["start_skill"] > 0,
 	}
 

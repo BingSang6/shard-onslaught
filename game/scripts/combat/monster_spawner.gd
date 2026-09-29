@@ -1,14 +1,22 @@
 class_name MonsterSpawner
 extends Node2D
-## 刷怪导演（SDS 3.7 + 波次闯关制）：
-## - 刷怪速率随时间递增（全局累计曲线上强度，跨关不重置）
+## 刷怪导演（SDS 3.7 + 波次闯关制 + V0.8 节奏修正）：
+## - 刷怪速率按【本关进度】驱动（wave_local，每关重置——跨关不继承，防后期曲线压垮前中期关卡）
+## - 峰值兜底：min_interval（关表下发）+ 每秒生成率上限（普通 2.2 / 精英 3.0）
+## - 密度硬兜底：大兽同屏 big_cap 满额转小怪；精英关同屏总数 MAX_MONSTERS_ELITE
 ## - 出怪类型：波次制下由 wave_manager 按关表 mix 比例下发；无 mix 时回落到自带权重曲线
 ## - BOSS 刷新改由 wave_manager 驱动（BOSS 关 enabled=false，本类不再自行刷 BOSS）
-## - 生成点离玩家保持最小距离（防出生贴脸秒杀）；同屏上限 MAX_MONSTERS
+## - 生成点离玩家保持最小距离（防出生贴脸秒杀）
 
 var player: Node2D = null
 var enabled := false
-var elapsed := 0.0
+var elapsed := 0.0                    # 全局累计（结算统计/无 mix 兜底曲线用）
+var wave_local := 0.0                 # 本关已过时间（每关重置——V0.8 B1 核心）
+var wave_duration := 30.0             # 本关时长（wave_manager 下发）
+var wave_min_interval := 0.55         # 本关刷怪间隔下限（峰值兜底，防满屏）
+var wave_big_cap := -1                # 大兽同屏上限（<0 = 不限制；满额转小怪）
+var wave_rate_cap := 2.2              # 每秒生成率上限（普通 2.2 / 精英 3.0；兜底不常触发）
+var max_monsters := 60                # 同屏总数上限（精英关由 wave_manager 下调为 MAX_MONSTERS_ELITE）
 var wave_mix := {}                    # 波次出怪比例（如 {"small":0.5,"big":0.5}；空=自带曲线）
 
 var _spawn_cd := 0.0
@@ -20,6 +28,8 @@ func reset(p_player: Node2D) -> void:
 	elapsed = 0.0
 	_spawn_cd = 0.8
 	wave_mix = {}
+	wave_local = 0.0
+	max_monsters = GameConfig.MAX_MONSTERS
 
 
 func stop() -> void:
@@ -31,29 +41,53 @@ func set_wave_mix(mix: Dictionary) -> void:
 	wave_mix = mix
 
 
+## 本关重置（V0.8 B1/B3：wave_manager 每关下发时长/峰值下限/大兽上限/生成率上限）
+func reset_wave(p_duration: float, p_min_interval: float, p_big_cap := -1, p_rate_cap := 2.2) -> void:
+	wave_local = 0.0
+	wave_duration = maxf(1.0, p_duration)
+	wave_min_interval = p_min_interval
+	wave_big_cap = p_big_cap
+	wave_rate_cap = p_rate_cap
+	_spawn_cd = 1.0
+
+
 func _physics_process(delta: float) -> void:
 	if not enabled or player == null:
 		return
 	elapsed += delta
+	wave_local += delta
 
-	if get_tree().get_nodes_in_group("monsters").size() >= GameConfig.MAX_MONSTERS:
+	if get_tree().get_nodes_in_group("monsters").size() >= max_monsters:
 		return  # 同屏上限保护
 
 	_spawn_cd -= delta
 	if _spawn_cd <= 0.0:
 		_spawn_cd = _current_interval()
-		# 批量：1 → 6（步进 30s，保证中段 60~120s 怪群密度足以支撑大连锁高光）
-		var batch := 1 + int(elapsed / 30.0)
+		# 批量：本关前 20s 单只，之后按本关进度批量（V0.8 B1：原全局 30s 步进跨关爆炸）
+		var batch := 1 + int(wave_local / 20.0)
 		for i in batch:
-			if get_tree().get_nodes_in_group("monsters").size() >= GameConfig.MAX_MONSTERS:
+			if get_tree().get_nodes_in_group("monsters").size() >= max_monsters:
 				break
-			spawn_monster(_roll_type(), _pick_spawn_pos())
+			var kind := _roll_type()
+			# 大兽同屏满额 → 本只转小怪（节奏不断，密度受控；V0.8 B3）
+			if kind == "big" and wave_big_cap >= 0 and _count_big() >= wave_big_cap:
+				kind = "small"
+			spawn_monster(kind, _pick_spawn_pos())
 
 
-## 刷怪间隔曲线：1.15s → 0.22s，幂曲线（指数 0.78）让中段更早收紧
+## 刷怪间隔曲线：1.15s → 0.22s 按本关进度收紧（幂 0.78），min_interval 与生成率上限双兜底
 func _current_interval() -> float:
-	var t := clampf(elapsed / GameConfig.RUN_TIME, 0.0, 1.0)
-	return lerpf(1.15, 0.22, pow(t, 0.78))
+	var t := clampf(wave_local / wave_duration, 0.0, 1.0)
+	return maxf(maxf(lerpf(1.15, 0.22, pow(t, 0.78)), wave_min_interval), 1.0 / wave_rate_cap)
+
+
+## 大兽同屏计数（big_cap 用）
+func _count_big() -> int:
+	var n := 0
+	for m in get_tree().get_nodes_in_group("monsters"):
+		if m.monster_id == "big":
+			n += 1
+	return n
 
 
 ## 怪物类型：优先用波次 mix 权重（wave_manager 按关下发）；
