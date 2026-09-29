@@ -37,7 +37,8 @@ var _flash := 0.0
 var _poly: Sprite2D
 var _radius := 16.0
 var _spin := 0.0                       # 缓慢自转（视觉生命感）
-var _hp_bar: ProgressBar               # 精英头顶血条（仅 big）
+var _hp_bar: ProgressBar               # 精英头顶血条（仅 big，受击时短暂显示）
+var _hp_show_time := 0.0               # 头顶血条剩余显示秒数（受击刷新 3s，归零隐藏——避免满屏小条）
 
 
 func _ready() -> void:
@@ -101,19 +102,24 @@ func setup(p_player: Node2D, p_monster_id: String, pos: Vector2) -> void:
 	add_child(_poly)
 
 	# 精英头顶血条（大晶兽；BOSS 用 HUD 大血条，小晶怪无血条保持割草速度感）
+	# 真机可读性：放大 150x11 + 亮描边，受击时显示 3s 后隐藏（原 120x8 恒显小条手机上看不清）
 	if p_monster_id == "big":
 		_hp_bar = ProgressBar.new()
-		_hp_bar.custom_minimum_size = Vector2(120, 8)
+		_hp_bar.custom_minimum_size = Vector2(150, 11)
 		_hp_bar.min_value = 0
 		_hp_bar.max_value = max_hp
 		_hp_bar.show_percentage = false
-		_hp_bar.size = Vector2(120, 8)
-		_hp_bar.position = Vector2(-60, -_radius - 26.0)
+		_hp_bar.size = Vector2(150, 11)
+		_hp_bar.position = Vector2(-75, -_radius - 30.0)
 		_hp_bar.visible = false
 		var bg := StyleBoxFlat.new()
-		bg.bg_color = Color(0.05, 0.08, 0.12, 0.75)
+		bg.bg_color = Color(0.05, 0.08, 0.12, 0.80)
+		bg.border_color = Color(0.85, 0.75, 1.0, 0.85)
+		bg.set_border_width_all(1)
+		bg.set_corner_radius_all(3)
 		var fill := StyleBoxFlat.new()
 		fill.bg_color = Color(0.72, 0.5, 1.0)
+		fill.set_corner_radius_all(3)
 		_hp_bar.add_theme_stylebox_override("background", bg)
 		_hp_bar.add_theme_stylebox_override("fill", fill)
 		add_child(_hp_bar)
@@ -164,6 +170,12 @@ func _physics_process(delta: float) -> void:
 		if fragile_left <= 0.0:
 			armor_hp = _armor_max()
 
+	# 精英头顶血条显示窗口递减（受击 3s 后隐藏）
+	if _hp_show_time > 0.0:
+		_hp_show_time -= delta
+		if _hp_show_time <= 0.0 and _hp_bar != null:
+			_hp_bar.visible = false
+
 	# 自动寻路：向玩家移动（SDS 3.2）+ 冲刺斩速度
 	var dir := (player.position - position).normalized()
 	position += (dir * speed + _kb_vel + dash_vel) * delta
@@ -208,6 +220,7 @@ func take_damage(damage: float, kdir := Vector2.ZERO, kforce := 0.0, chain_level
 		hp -= damage
 
 	if _hp_bar != null and hp < max_hp:
+		_hp_show_time = 3.0            # 受击刷新显示窗口
 		_hp_bar.visible = true
 		_hp_bar.value = maxf(0.0, hp)
 	if hp <= 0.0:

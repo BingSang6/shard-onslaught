@@ -6,13 +6,34 @@ extends Node
 
 var main: Node
 var out_dir := "D:/hsp/work/dev/aicode/game/gcj/_shots"
+var _save_bak := {}                    # 存档备份（截图会改 GameData 并触发存档，结束时还原）
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	DirAccess.make_dir_recursive_absolute(out_dir)
+	_backup_save()
 	main = preload("res://scripts/core/main.gd").new()
 	add_child(main)
 	_run_sequence()
+
+
+## 备份/还原存档（截图脚本会预置晶核、强化等级、图鉴等展示值，结束后还原真实进度）
+func _backup_save() -> void:
+	_save_bak = {
+		"crystal_core": GameData.crystal_core,
+		"permanent_upgrades": GameData.permanent_upgrades.duplicate(),
+		"unlocked_monsters": GameData.unlocked_monsters.duplicate(),
+		"muted": GameData.muted,
+		"max_wave": GameData.max_wave,
+		"cleared_all": GameData.cleared_all,
+		"auto_upgrade": GameData.auto_upgrade,
+	}
+
+
+func _restore_save() -> void:
+	for key in _save_bak:
+		GameData.set(key, _save_bak[key])
+	GameData.save_game()
 
 
 func _run_sequence() -> void:
@@ -105,6 +126,7 @@ func _run_sequence() -> void:
 	await get_tree().create_timer(1.0, true).timeout
 	await _shot("10_settle_wave")
 
+	_restore_save()                      # 还原真实存档（截图预置值不落盘）
 	get_tree().quit()
 
 

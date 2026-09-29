@@ -40,12 +40,12 @@ func _ready() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	# ---- 顶部状态区 ----
+	# ---- 顶部状态区（下移 60px 避开 iPhone 刘海/状态栏安全区）----
 	var top := HBoxContainer.new()
 	top.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
 	top.offset_left = 16
 	top.offset_right = -16
-	top.offset_top = 14
+	top.offset_top = 60
 	top.add_theme_constant_override("separation", 14)
 	root.add_child(top)
 
@@ -148,12 +148,12 @@ func _ready() -> void:
 	notice_label.modulate.a = 0.0
 	root.add_child(notice_label)
 
-	# ---- BOSS 血条（顶部下方居中，仅 BOSS 关显示）----
+	# ---- BOSS 血条（顶部下方居中，仅 BOSS 关显示；同步避开刘海安全区）----
 	var boss_box := VBoxContainer.new()
 	boss_box.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
 	boss_box.offset_left = -300
 	boss_box.offset_right = 300
-	boss_box.offset_top = 108
+	boss_box.offset_top = 152
 	boss_box.add_theme_constant_override("separation", 2)
 	boss_box.visible = false
 	root.add_child(boss_box)

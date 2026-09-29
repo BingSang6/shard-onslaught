@@ -19,10 +19,21 @@ var main: Node2D
 func _ready() -> void:
 	# 测试驱动器在暂停期间也要继续跑（升级弹窗会 paused=true）
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_reset_game_data()   # 测试自包含：清掉本地真实存档/截图脚本残留（start_skill 等会干扰开局随机强化）
 	await get_tree().process_frame
 	await _run_all()
 	print("\n========== 冒烟测试结果：%d 项检查，%d 失败 ==========" % [checks, failures])
 	get_tree().quit(1 if failures > 0 else 0)
+
+
+## 重置存档相关状态（不写盘——只在内存中隔离本测试进程）
+func _reset_game_data() -> void:
+	GameData.permanent_upgrades = {"hp": 0, "attack": 0, "pick_range": 0, "start_skill": 0}
+	GameData.unlocked_monsters = []
+	GameData.crystal_core = 0
+	GameData.max_wave = 0
+	GameData.cleared_all = false
+	GameData.auto_upgrade = false
 
 
 func check(cond: bool, msg: String) -> void:

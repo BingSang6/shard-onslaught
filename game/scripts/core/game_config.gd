@@ -56,7 +56,7 @@ const BOSS_SPAWN_TIME := 120.0
 # 10 关：普通波/精英波沿用刷怪导演曲线（mix 控制出怪比例），BOSS 关暂停常规刷怪单刷 BOSS
 const WAVE_TABLE := [
 	{"wave": 1,  "type": "normal", "duration": 30.0, "mix": {"small": 1.0}},
-	{"wave": 2,  "type": "elite",  "duration": 30.0, "mix": {"big": 1.0}},
+	{"wave": 2,  "type": "elite",  "duration": 30.0, "mix": {"small": 0.35, "big": 0.65}},   # 真机反馈：全大兽开局顶不住 → 掺小怪渐进
 	{"wave": 3,  "type": "boss",   "duration": 60.0, "boss_id": "boss1"},
 	{"wave": 4,  "type": "elite",  "duration": 35.0, "mix": {"small": 0.5, "big": 0.5}, "airdrop": true},
 	{"wave": 5,  "type": "boss",   "duration": 60.0, "boss_id": "boss2"},
