@@ -52,11 +52,14 @@ func _run_sequence() -> void:
 	await get_tree().create_timer(0.5, true).timeout
 	await _shot("04b_hp_low_shield")
 
-	# 5. 升级弹窗：连升 2 级合并 + 推荐项紫边高亮（任务书 §5.2）
+	# 5. 升华气泡：连升 2 级不打断战斗，右下角气泡呼吸提示 → 点击打开三选一（推荐紫边）
 	main.skills.acquire("shatter_blast")
 	main.skills.acquire("triple")          # 已有弹种卡 → 推荐规则②强化弹种
-	main.pending_levelups = 2
-	main._open_upgrade_panel()
+	main.pending_levelups = 0
+	main._on_xp_gained(GameConfig.xp_to_next(main.level) * 3.5)
+	await get_tree().create_timer(0.6, true).timeout
+	await _shot("05a_levelup_bubble")
+	main._open_upgrade_panel()             # 模拟点击气泡
 	await get_tree().create_timer(0.6, true).timeout
 	await _shot("05_upgrade_recommended")
 	var rec: String = main.upgrade_panel._recommended

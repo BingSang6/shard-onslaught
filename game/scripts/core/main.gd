@@ -291,6 +291,7 @@ func _connect_signals() -> void:
 	settle_panel.menu_pressed.connect(_back_to_menu)
 	hud.dash_pressed.connect(func(): player.try_dash())
 	player.dash_state_changed.connect(hud._on_dash_changed)
+	hud.levelup_pressed.connect(func(): _open_upgrade_panel())
 	# 局外面板（阶段3）：主菜单三入口开合
 	start_screen.shop_pressed.connect(func():
 		upgrade_shop.open())
@@ -308,7 +309,10 @@ func _connect_signals() -> void:
 	wave_manager.wave_started.connect(_on_wave_started)
 	wave_manager.wave_cleared.connect(_on_wave_cleared)
 	wave_manager.transition_started.connect(func(next_wave: int, _dur: float):
-		hud.show_notice("补给空投！第 %d 关来袭" % next_wave))
+		hud.show_notice("补给空投！第 %d 关来袭" % next_wave)
+		# 关间过渡兜底：攒着的升华若一直没点，趁喘息窗口自动弹一次防忘
+		if pending_levelups > 0 and state == State.PLAYING:
+			_open_upgrade_panel())
 
 
 # ========================= 对局生命周期 =========================
@@ -363,6 +367,7 @@ func start_run() -> void:
 	hud.set_time(wave_manager.wave_time_left)
 	hud.set_kills(0)
 	hud.set_cores(GameData.crystal_core)
+	hud.set_pending_levelups(0)          # 升华气泡复位
 	hud.set_xp(level, xp, GameConfig.xp_to_next(level))
 	GameEvents.run_started.emit()
 
@@ -435,7 +440,11 @@ func _on_xp_gained(amount: float) -> void:
 	hud.set_xp(level, xp, GameConfig.xp_to_next(level))
 	if leveled:
 		GameEvents.level_up.emit(level)
-		_open_upgrade_panel()
+		# 手动气泡模式：升级不再打断战斗，气泡累计提示，玩家点击/关间过渡才打开三选一
+		if GameData.auto_upgrade:
+			_auto_apply_levelups()
+		else:
+			hud.set_pending_levelups(pending_levelups)
 
 
 ## 打开升级 3 选 1（连升合并：≥2 级只弹 1 次，选 1 个其余自动学推荐）
@@ -443,6 +452,8 @@ func _on_xp_gained(amount: float) -> void:
 func _open_upgrade_panel() -> void:
 	if GameData.auto_upgrade:
 		_auto_apply_levelups()
+		return
+	if pending_levelups <= 0:
 		return
 	state = State.UPGRADE_PANEL
 	get_tree().paused = true
@@ -481,6 +492,7 @@ func _on_upgrade_chosen(skill_id: String) -> void:
 		var auto_pick := _pick_recommended(rest)
 		_apply_skill(auto_pick)
 		pending_levelups -= 1
+	hud.set_pending_levelups(pending_levelups)
 	upgrade_panel.close()
 	get_tree().paused = false
 	state = State.PLAYING
@@ -565,6 +577,7 @@ func _finish_run(won: bool) -> void:
 	if state == State.SETTLE:
 		return
 	state = State.SETTLE
+	hud.set_pending_levelups(0)          # 结算时隐藏升华气泡
 	wave_manager.stop()
 	get_tree().paused = true
 

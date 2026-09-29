@@ -149,14 +149,23 @@ func _t_upgrade_panel() -> void:
 	main.xp = 0.0
 	main._on_xp_gained(GameConfig.xp_to_next(main.level))
 	await tick(2)
-	check(main.state == 2, "经验满后进入 UPGRADE_PANEL")
+	# 手动气泡模式：升级不打断战斗，气泡提示待处理
+	check(main.state == 1 and not main.get_tree().paused, "升级不打断：保持 PLAYING（气泡模式）")
+	check(main.pending_levelups == 1 and main.hud.levelup_button.visible,
+		"升华气泡显示待升级（pending=%d）" % main.pending_levelups)
+	main._open_upgrade_panel()   # 模拟点击气泡
+	await tick(2)
+	check(main.state == 2, "点击气泡后进入 UPGRADE_PANEL")
 	check(main.upgrade_panel._root.visible, "3 选 1 弹窗已显示")
 	main._on_upgrade_chosen("aura")
 	await tick(2)
 	check(main.skills.get_level("aura") == 1, "选择后习得晶域扩散 Lv1")
 	check(main.state == 1 and not main.get_tree().paused, "选卡后恢复 PLAYING")
+	check(not main.hud.levelup_button.visible, "消化完毕气泡隐藏")
 	# 同技能重复获取 → 升级
 	main._on_xp_gained(GameConfig.xp_to_next(main.level))
+	await tick(2)
+	main._open_upgrade_panel()
 	await tick(2)
 	main._on_upgrade_chosen("aura")
 	check(main.skills.get_level("aura") == 2, "重复选择同一技能升至 Lv2")
@@ -164,7 +173,11 @@ func _t_upgrade_panel() -> void:
 	main.pending_levelups = 0
 	main._on_xp_gained(GameConfig.xp_to_next(main.level) * 2.5)
 	await tick(2)
-	check(main.state == 2 and main.pending_levelups == 2, "多级经验合并入账（pending=%d）" % main.pending_levelups)
+	check(main.state == 1 and main.pending_levelups == 2 and main.hud.levelup_button.visible,
+		"多级经验合并入账不打断（pending=%d）" % main.pending_levelups)
+	main._open_upgrade_panel()
+	await tick(2)
+	check(main.state == 2 and main.pending_levelups == 2, "气泡打开弹窗（连升 pending=%d）" % main.pending_levelups)
 	main._on_upgrade_chosen("fire_rate")
 	await tick(2)
 	check(main.state == 1 and main.pending_levelups == 0 and not main.get_tree().paused,
@@ -178,6 +191,7 @@ func _t_pause_freezes_world() -> void:
 	var m: Monster = main.spawner.spawn_monster("small", Vector2(200, 300))
 	m.speed = 0.0
 	var pos_before: Vector2 = m.position
+	main.pending_levelups = 1            # 气泡模式：有存货才能打开弹窗
 	main._open_upgrade_panel()
 	await tick(12)
 	check(main.get_tree().paused, "弹窗期间树已暂停")
@@ -783,7 +797,10 @@ func _t_upgrade_optimize() -> void:
 	main.pending_levelups = 0
 	main._on_xp_gained(GameConfig.xp_to_next(main.level) * 3.5)
 	await tick(2)
-	check(main.state == 2 and main.pending_levelups == 2, "多级经验合并入账（pending=%d）" % main.pending_levelups)
+	check(main.state == 1 and main.pending_levelups == 2, "多级经验合并入账不打断（pending=%d）" % main.pending_levelups)
+	main._open_upgrade_panel()
+	await tick(2)
+	check(main.state == 2 and main.pending_levelups == 2, "U1 气泡打开弹窗（pending=%d）" % main.pending_levelups)
 	main._on_upgrade_chosen("heal")
 	check(main.state == 1 and main.pending_levelups == 0, "U1 连升合并：单次弹窗选 1 项即消化全部")
 	# U3 一键推荐规则
@@ -800,3 +817,21 @@ func _t_upgrade_optimize() -> void:
 	await tick(2)
 	check(main.state == 1 and main.pending_levelups == 0, "U2 自动升级不弹窗，等级自动消化")
 	GameData.auto_upgrade = false
+	# U4 手动气泡信号链：hud.levelup_pressed → 打开三选一
+	main._on_xp_gained(GameConfig.xp_to_next(main.level))
+	await tick(2)
+	check(main.state == 1 and main.hud.levelup_button.visible, "U4 升级后气泡提示不打断")
+	main.hud.levelup_pressed.emit()
+	await tick(2)
+	check(main.state == 2, "U4 点击升华气泡打开三选一")
+	main._on_upgrade_chosen("heal")
+	await tick(2)
+	# U5 关间过渡兜底：攒着没点 → 过渡信号自动弹一次防忘
+	main._on_xp_gained(GameConfig.xp_to_next(main.level))
+	await tick(2)
+	main.wave_manager.transition_started.emit(2, 3.0)
+	await tick(2)
+	check(main.state == 2, "U5 关间过渡兜底自动弹窗")
+	main._on_upgrade_chosen("heal")
+	await tick(2)
+	check(main.state == 1, "U5 选卡后恢复战斗")

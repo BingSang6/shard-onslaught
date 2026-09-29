@@ -4,6 +4,7 @@ extends CanvasLayer
 ## 中部：连锁爆炸连击弹字。全部纯代码构建，无图片资源。
 
 signal dash_pressed
+signal levelup_pressed                                     # 升华气泡被点击（手动打开三选一）
 
 var hp_bar: ProgressBar
 var hp_ghost_bar: ProgressBar          # 扣血白条残影（延迟跟随实际血量）
@@ -19,6 +20,7 @@ var combo_label: Label
 var notice_label: Label
 var dash_button: Button
 var dash_cd_label: Label
+var levelup_button: Button                                  # 升华气泡（pending>0 时显示，点击打开三选一）
 var boss_name_label: Label
 var boss_bar: ProgressBar
 
@@ -187,6 +189,25 @@ func _ready() -> void:
 	dash_cd_label.visible = false
 	root.add_child(dash_cd_label)
 
+	# ---- 升华气泡（右下角、瞬闪按钮上方；升级攒着不弹窗，玩家点击才打开三选一）----
+	levelup_button = UIStyle.make_button("★ 升华", 20, Vector2(124, 58))
+	levelup_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	levelup_button.offset_left = -144
+	levelup_button.offset_right = -20
+	levelup_button.offset_top = -300
+	levelup_button.offset_bottom = -242
+	var lv_normal: StyleBoxFlat = UIStyle.panel_style(UIStyle.PURPLE, 2, 12)
+	var lv_hover: StyleBoxFlat = UIStyle.panel_style(UIStyle.PURPLE, 2, 12)
+	lv_hover.bg_color = Color(0.16, 0.06, 0.26, 0.92)
+	var lv_pressed: StyleBoxFlat = UIStyle.panel_style(Color("c77dff"), 2, 12)
+	levelup_button.add_theme_stylebox_override("normal", lv_normal)
+	levelup_button.add_theme_stylebox_override("hover", lv_hover)
+	levelup_button.add_theme_stylebox_override("pressed", lv_pressed)
+	levelup_button.add_theme_color_override("font_outline_color", Color(0.45, 0.08, 0.70, 0.9))
+	levelup_button.visible = false
+	levelup_button.pressed.connect(func(): levelup_pressed.emit())
+	root.add_child(levelup_button)
+
 	# 事件
 	GameEvents.chain_triggered.connect(_on_chain)
 	GameEvents.player_damaged.connect(_on_hp_changed)
@@ -284,6 +305,12 @@ func set_kills(count: int) -> void:
 	kill_label.text = "击杀 %d" % count
 
 
+## 升华气泡：待处理升级数（>0 显示并呼吸提示，=0 隐藏）——升级不再打断战斗
+func set_pending_levelups(count: int) -> void:
+	levelup_button.visible = count > 0
+	levelup_button.text = "★ 升华 ×%d" % count if count > 1 else "★ 升华"
+
+
 ## 晶核货币显示（开局=存档余额；结算入账后刷新）
 func set_cores(count: int) -> void:
 	core_label.text = "◆%d" % count
@@ -343,6 +370,12 @@ func _process(_delta: float) -> void:
 		hp_bar.modulate.a = 0.78 + 0.22 * sin(Time.get_ticks_msec() * 0.006)
 	else:
 		hp_bar.modulate.a = 1.0
+
+	# 升华气泡呼吸提示（有存货时亮度脉动，吸引注意但不打断）
+	if levelup_button.visible:
+		levelup_button.modulate = Color(1, 1, 1, 0.82 + 0.30 * abs(sin(Time.get_ticks_msec() * 0.004)))
+	else:
+		levelup_button.modulate = Color.WHITE
 
 	# 每帧刷新瞬闪按钮冷却显示
 	if _player == null or not dash_button.visible:
