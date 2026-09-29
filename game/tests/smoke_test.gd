@@ -109,6 +109,7 @@ func _run_all() -> void:
 	await _t_supply_drops()
 	await _t_weapons()
 	await _t_upgrade_optimize()
+	await _t_sprite_scale()
 
 
 # ---------------- T1 状态机与刷怪 ----------------
@@ -827,6 +828,25 @@ func _t_upgrade_optimize() -> void:
 	main._on_xp_gained(GameConfig.xp_to_next(main.level))
 	await tick(2)
 	check(main.state == 1 and main.pending_levelups == 0, "U2 自动升级不弹窗，等级自动消化")
+
+
+func _t_sprite_scale() -> void:
+	print("\n[T28] 显示尺寸与素材分辨率无关（缩图回归防护）")
+	# 数学不变式：draw_px = scale × 纹理边长，任意分辨率素材屏上大小恒定
+	var s2048 := GameConfig.sprite_scale(26.0, 2048.0)
+	var s256 := GameConfig.sprite_scale(26.0, 256.0)
+	var s320 := GameConfig.sprite_scale(26.0, 320.0)
+	check(absf(s2048 * 2048.0 - s256 * 256.0) < 0.01 and absf(s2048 * 2048.0 - s320 * 320.0) < 0.01,
+		"sprite_scale：256/320/2048 三种纹理画布显示尺寸一致")
+	check(absf(GameConfig.sprite_scale(26.0) - s2048) < 1e-6, "sprite_scale 缺省参数兼容 2048 基准")
+	# 实体校验：玩家/怪物贴图按实际纹理宽度换算，绘制直径 = 半径×2÷900×2048
+	var pdraw: float = main.player._poly.scale.x * main.player._poly.texture.get_width()
+	var pwant: float = 22.0 * 2.0 / GameConfig.ASSET_BODY_DIAMETER * GameConfig.ASSET_SRC_DIAMETER * 1.8
+	check(absf(pdraw - pwant) < 1.0, "玩家绘制直径 %.0fpx 与基准 %.0fpx 一致（主角×1.8）" % [pdraw, pwant])
+	var m: Monster = main.spawner.spawn_monster("big", main.player.position + Vector2(-350, -250))
+	var mdraw: float = m._poly.scale.x * m._poly.texture.get_width()
+	var mwant: float = 26.0 * 2.0 / GameConfig.ASSET_BODY_DIAMETER * GameConfig.ASSET_SRC_DIAMETER
+	check(absf(mdraw - mwant) < 1.0, "大晶兽绘制直径 %.0fpx 与基准 %.0fpx 一致" % [mdraw, mwant])
 	GameData.auto_upgrade = false
 	# U4 手动气泡信号链：hud.levelup_pressed → 打开三选一
 	main._on_xp_gained(GameConfig.xp_to_next(main.level))

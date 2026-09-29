@@ -175,13 +175,15 @@ const WEAPON_TYPES := {
 static func weapon_lv_mult(lv: int) -> float:
 	return 1.0 + 0.15 * (lv - 1.0)
 
-# ---- PNG 素材（素材替换指南：2048px 贴图，主体直径 ≈ 1430px，含半透明辉光）----
-const ASSET_BODY_DIAMETER := 900.0  # 视觉整改V2：1430→900 放大1.59x（原主体35-55px细节丢失）
+# ---- PNG 素材（素材替换指南：主体直径约占画布 900/2048，含半透明辉光；画布可为任意分辨率）----
+const ASSET_SRC_DIAMETER := 2048.0  # 素材原始画布边长（sprite_scale 换算基准）
+const ASSET_BODY_DIAMETER := 900.0  # 画布内主体直径。视觉整改V2：1430→900 放大1.59x（原主体35-55px细节丢失）
 
 ## 按碰撞半径换算 Sprite2D 缩放（Sprite2D 默认 1px = 1 世界单位；
 ## 若实机视觉偏大/偏小，微调 ASSET_BODY_DIAMETER，碰撞半径不改）
-static func sprite_scale(radius: float) -> float:
-	return radius * 2.0 / ASSET_BODY_DIAMETER
+## tex_size=素材实际边长：显示尺寸与素材分辨率无关（缩图/换图不改变屏上大小）
+static func sprite_scale(radius: float, tex_size := ASSET_SRC_DIAMETER) -> float:
+	return radius * 2.0 / (ASSET_BODY_DIAMETER * tex_size / ASSET_SRC_DIAMETER)
 
 # ---- 后处理泛光（Bloom：亮部模糊提亮叠加；性能紧张时把 intensity 调 0 即关闭）----
 const BLOOM := {

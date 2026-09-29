@@ -74,7 +74,7 @@ func _ready() -> void:
 	# 晶体外观：设计稿透明 PNG（贴图自带辉光，Sprite2D 替代几何原型）
 	_poly = Sprite2D.new()
 	_poly.texture = preload("res://assets/player_crystal.png")
-	_poly.scale = Vector2.ONE * GameConfig.sprite_scale(22.0) * 1.8  # 视觉整改V2：玩家贴图专项放大1.8x(主角突出)
+	_poly.scale = Vector2.ONE * GameConfig.sprite_scale(22.0, _poly.texture.get_width()) * 1.8  # 视觉整改V2：玩家贴图专项放大1.8x(主角突出)
 	add_child(_poly)
 
 	# 周身微光粒子（SDS：GPUParticles2D 微光）

@@ -35,7 +35,7 @@ func _ready() -> void:
 	_sprite = Sprite2D.new()
 	_sprite.texture = TEXTURES.get(kind, TEXTURES["heal"])
 	# 视觉直径约 46 世界单位（碰撞拾取半径 22）
-	_sprite.scale = Vector2.ONE * GameConfig.sprite_scale(23.0)
+	_sprite.scale = Vector2.ONE * GameConfig.sprite_scale(23.0, _sprite.texture.get_width())
 	add_child(_sprite)
 
 

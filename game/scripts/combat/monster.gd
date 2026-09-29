@@ -98,7 +98,7 @@ func setup(p_player: Node2D, p_monster_id: String, pos: Vector2) -> void:
 	# 外观：按类型使用设计稿透明 PNG（Sprite2D 替代几何原型，自转/受击反馈保留）
 	_poly = Sprite2D.new()
 	_poly.texture = load(tex_path)
-	_poly.scale = Vector2.ONE * GameConfig.sprite_scale(_radius)
+	_poly.scale = Vector2.ONE * GameConfig.sprite_scale(_radius, _poly.texture.get_width())
 	add_child(_poly)
 
 	# 精英头顶血条（大晶兽；BOSS 用 HUD 大血条，小晶怪无血条保持割草速度感）
@@ -142,7 +142,7 @@ func make_split_child(owner_hp_ratio: float) -> void:
 	xp_value = maxf(5.0, xp_value * 0.15)
 	_radius *= 0.72
 	contact_damage *= 0.6
-	_poly.scale = Vector2.ONE * GameConfig.sprite_scale(_radius)
+	_poly.scale = Vector2.ONE * GameConfig.sprite_scale(_radius, _poly.texture.get_width())
 	# 碰撞半径与光环不动（重生成成本高，视觉以贴图缩小为准）
 
 
