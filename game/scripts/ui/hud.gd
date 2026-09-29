@@ -6,7 +6,9 @@ extends CanvasLayer
 signal dash_pressed
 
 var hp_bar: ProgressBar
+var hp_ghost_bar: ProgressBar          # 扣血白条残影（延迟跟随实际血量）
 var hp_label: Label
+var shield_label: Label                # 护盾层数点（●×N，玩家拾取护盾碎片）
 var wave_label: Label
 var time_label: Label
 var kill_label: Label
@@ -22,6 +24,8 @@ var boss_bar: ProgressBar
 
 var _player: Node2D = null
 var _boss: Monster = null                       # HUD 轮询 BOSS 血量（波次制血条）
+var _hp_tier := -1                              # 当前血量分级（0 健康/1 偏低/2 危急），变更时才重建样式
+var _last_shield := -1                          # 护盾层数缓存（避免每帧刷新 Label）
 
 
 func _ready() -> void:
@@ -43,22 +47,46 @@ func _ready() -> void:
 	top.add_theme_constant_override("separation", 14)
 	root.add_child(top)
 
-	# 血条（左）
+	# 血条（左：数值行[HP 数值 + 护盾点] + 血量条[扣血白条残影 + 实际血量]）
 	var hp_box := VBoxContainer.new()
-	hp_box.custom_minimum_size = Vector2(280, 30)
+	hp_box.custom_minimum_size = Vector2(280, 54)
 	hp_box.add_theme_constant_override("separation", 2)
 	top.add_child(hp_box)
-	hp_label = UIStyle.make_label("HP 100/100", 15)
-	hp_box.add_child(hp_label)
+
+	var hp_row := HBoxContainer.new()
+	hp_box.add_child(hp_row)
+	hp_label = UIStyle.make_label("HP 100/100", 19)
+	hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	hp_row.add_child(hp_label)
+	var hp_spacer := Control.new()
+	hp_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hp_row.add_child(hp_spacer)
+	shield_label = UIStyle.make_label(" ", 19, Color(0.72, 0.55, 1.0))
+	shield_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	hp_row.add_child(shield_label)
+
+	# 残影条与血条绝对叠放：实际血条在上层盖住前段，残影多出的白段 = 刚扣掉的血
+	var bar_holder := Control.new()
+	bar_holder.custom_minimum_size = Vector2(280, 22)
+	hp_box.add_child(bar_holder)
+	hp_ghost_bar = ProgressBar.new()
+	hp_ghost_bar.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	hp_ghost_bar.min_value = 0
+	hp_ghost_bar.max_value = 100
+	hp_ghost_bar.show_percentage = false
+	hp_ghost_bar.add_theme_stylebox_override("background", StyleBoxEmpty.new())
+	var ghost_fill := StyleBoxFlat.new()
+	ghost_fill.bg_color = Color(1, 1, 1, 0.50)
+	ghost_fill.set_corner_radius_all(6)
+	hp_ghost_bar.add_theme_stylebox_override("fill", ghost_fill)
+	bar_holder.add_child(hp_ghost_bar)
 	hp_bar = ProgressBar.new()
-	hp_bar.custom_minimum_size = Vector2(280, 20)
+	hp_bar.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	hp_bar.min_value = 0
 	hp_bar.max_value = 100
 	hp_bar.show_percentage = false
-	var hp_styles: Array = UIStyle.bar_styles(Color(0.05, 0.85, 0.8))
-	hp_bar.add_theme_stylebox_override("background", hp_styles[0])
-	hp_bar.add_theme_stylebox_override("fill", hp_styles[1])
-	hp_box.add_child(hp_bar)
+	_apply_hp_tier_style(0)
+	bar_holder.add_child(hp_bar)
 
 	# 倒计时（中，上带关卡进度"第 N/10 关"）
 	var time_box := VBoxContainer.new()
@@ -174,9 +202,48 @@ func bind_player(p_player: Node2D) -> void:
 
 # ---------------- 数据更新 ----------------
 
+## 血量分级配色（0=健康青 / 1=偏低黄 / 2=危急红），一眼读出还剩多少
+static func hp_tier_color(tier: int) -> Color:
+	match tier:
+		1:
+			return Color(1.0, 0.80, 0.25)
+		2:
+			return Color(1.0, 0.32, 0.36)
+		_:
+			return Color(0.10, 0.95, 0.75)
+
+
+func _apply_hp_tier_style(tier: int) -> void:
+	var color := hp_tier_color(tier)
+	var styles: Array = UIStyle.bar_styles(color)
+	styles[0].set_border_width_all(2)        # 加粗描边：与 BOSS 血条拉开区分度
+	hp_bar.add_theme_stylebox_override("background", styles[0])
+	hp_bar.add_theme_stylebox_override("fill", styles[1])
+	hp_label.add_theme_color_override("font_color", color)
+	_hp_tier = tier
+
+
 func set_hp(hp: float, max_hp: float) -> void:
+	var old_value := hp_bar.value
 	hp_bar.max_value = max_hp
+	hp_ghost_bar.max_value = max_hp
 	hp_bar.value = hp
+
+	# 分级换色（同档不重建）
+	var ratio := hp / maxf(1.0, max_hp)
+	var tier := 2 if ratio < 0.30 else (1 if ratio < 0.60 else 0)
+	if tier != _hp_tier:
+		_apply_hp_tier_style(tier)
+
+	# 扣血残影：白色段延迟 0.15s 后收缩到新血量；回血直接对齐
+	hp_ghost_bar.value = old_value if hp < old_value else hp
+	if hp < old_value:
+		var tw := hp_ghost_bar.create_tween()
+		tw.tween_interval(0.15)
+		tw.tween_property(hp_ghost_bar, "value", hp, 0.40)
+	else:
+		hp_ghost_bar.value = hp
+
 	hp_label.text = "HP %d/%d" % [roundi(hp), roundi(max_hp)]
 
 
@@ -263,6 +330,19 @@ func _process(_delta: float) -> void:
 			boss_bar.value = maxf(0.0, _boss.hp)
 		else:
 			clear_boss()
+
+	# 护盾层数点（●×N，变更时才刷新）
+	if _player != null and is_instance_valid(_player):
+		var charges: int = clampi(int(_player.shield_charges), 0, GameConfig.DROP_TABLE["shield_max"])
+		if charges != _last_shield:
+			_last_shield = charges
+			shield_label.text = ("●".repeat(charges)) if charges > 0 else " "
+
+	# 危急血量（<30%）血条红光脉冲提醒
+	if _hp_tier == 2:
+		hp_bar.modulate.a = 0.78 + 0.22 * sin(Time.get_ticks_msec() * 0.006)
+	else:
+		hp_bar.modulate.a = 1.0
 
 	# 每帧刷新瞬闪按钮冷却显示
 	if _player == null or not dash_button.visible:

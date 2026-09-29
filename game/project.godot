@@ -60,3 +60,7 @@ dash={
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.031373, 0.031373, 0.094118, 1)
+
+[gui]
+
+theme/custom="res://assets/fonts/game_theme.tres"

@@ -52,7 +52,7 @@ func _ready() -> void:
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(box)
 
-	_title_label = UIStyle.make_label("✦ 晶体升华 ✦", 40, Color(0.6, 0.95, 1.0))
+	_title_label = UIStyle.make_label("★ 晶体升华 ★", 40, Color(0.6, 0.95, 1.0))
 	box.add_child(_title_label)
 
 	_cards_box = VBoxContainer.new()
@@ -69,7 +69,7 @@ func open(choices: Array, skills: Node, recommended: String = "", pending: int =
 	_recommended = recommended if choices.has(recommended) else ""
 	for skill_id in choices:
 		_cards_box.add_child(_make_card(skill_id, skills, skill_id == _recommended))
-	_title_label.text = "✦ 晶体升华 · 连升 %d 级 ✦" % pending if pending > 1 else "✦ 晶体升华 ✦"
+	_title_label.text = "★ 晶体升华 · 连升 %d 级 ★" % pending if pending > 1 else "★ 晶体升华 ★"
 	_root.visible = true
 
 

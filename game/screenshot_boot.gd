@@ -45,6 +45,13 @@ func _run_sequence() -> void:
 	await get_tree().create_timer(4.0, true).timeout
 	await _shot("04_playing")
 
+	# 4b. 血条验收：压到黄档 → 拾盾×2 → 掉血到红档（残影白条 + 护盾点 + 低血脉冲）
+	main.player.shield_charges = 2
+	main.player.hp = main.player.max_hp * 0.40
+	main.player.take_damage(main.player.max_hp * 0.16)   # → 24% 红档，触发扣血残影
+	await get_tree().create_timer(0.5, true).timeout
+	await _shot("04b_hp_low_shield")
+
 	# 5. 升级弹窗：连升 2 级合并 + 推荐项紫边高亮（任务书 §5.2）
 	main.skills.acquire("shatter_blast")
 	main.skills.acquire("triple")          # 已有弹种卡 → 推荐规则②强化弹种

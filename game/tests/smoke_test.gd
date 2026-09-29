@@ -679,13 +679,14 @@ func _t_supply_drops() -> void:
 	await tick(2)
 	var supplies: int = main.get_tree().get_nodes_in_group("supply_drops").size()
 	check(supplies >= 1, "D1 击杀计数触发补给掉落（100 杀掉 %d 个）" % supplies)
-	# D2 残血保护：HP<30% 血包权重 ×3（60%→约82%）
+	# D2 残血保护：稀有判定先分走 20%，实际血包占比 = 0.8×(1.8/2.2) ≈ 65.4%（σ≈3.4%）
+	# 阈值 110(55%) 距均值 -3σ 安全，且与无保护基线 48% 保持区分度，非 flaky
 	main.player.hp = main.player.max_hp * 0.2
 	var heal_count := 0
 	for i in 200:
 		if dm._roll_kind() == "heal":
 			heal_count += 1
-	check(heal_count >= 130, "D2 残血时血包占比显著提高（%d/200 = %.0f%%，权重×3）" % [heal_count, heal_count / 2.0])
+	check(heal_count >= 110, "D2 残血时血包占比显著提高（%d/200 = %.0f%%，权重×3）" % [heal_count, heal_count / 2.0])
 	main.player.heal(9999.0)
 	# D3 上限回收：强制再补 5 个 → 回收消化后场上 ≤ 8
 	for i in 5:

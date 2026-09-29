@@ -70,7 +70,7 @@ func open(won: bool, stats: Dictionary) -> void:
 	var wave_total: int = stats.get("wave_total", GameConfig.WAVE_COUNT)
 	# 波次制进度：胜利=通关第 N 关；失败=到达第 N 关（任务书：替代"存活 180s"目标感）
 	_stats_label.text = "%s\n击杀怪物：%d\n最高连锁：x%d\n战斗时长：%02d:%02d" % [
-		("✦ 通关全部 %d 关 ✦" % wave_total) if won else ("到达 第 %d / %d 关" % [wave, wave_total]),
+		("★ 通关全部 %d 关 ★" % wave_total) if won else ("到达 第 %d / %d 关" % [wave, wave_total]),
 		stats.get("kills", 0), stats.get("max_combo", 0),
 		int(survived / 60.0), int(survived) % 60,
 	]

@@ -111,7 +111,7 @@ func _ready() -> void:
 func refresh() -> void:
 	_core_label.text = "◆ 晶核储备：%d" % GameData.crystal_core
 	if GameData.max_wave > 0:
-		var cleared := " ✦已通关✦" if GameData.cleared_all else ""
+		var cleared := " ★已通关★" if GameData.cleared_all else ""
 		_wave_label.text = "最高到达：第 %d / %d 关%s" % [
 			GameData.max_wave, GameConfig.WAVE_COUNT, cleared]
 	else:
