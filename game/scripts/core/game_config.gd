@@ -5,8 +5,8 @@ class_name GameConfig
 # ---- 对局 ----
 const RUN_TIME := 180.0                     # 单局倒计时（秒），存活到 0 即通关
 const ARENA_SIZE := Vector2(1000, 1800)     # 晶洞场地尺寸（世界坐标）
-const MAX_MONSTERS := 60                    # 同屏怪物上限（WebGL 性能保护）
-const MAX_MONSTERS_ELITE := 45              # 精英关同屏上限（V0.8 B3：密度硬兜底防满屏）
+const MAX_MONSTERS := 32                    # 同屏怪物上限（V0.8.1 实机反馈再收敛：60→32，割草靠击杀不靠堆屏）
+const MAX_MONSTERS_ELITE := 26              # 精英关同屏上限（V0.8.1：45→26）
 const MAX_CHAIN := 8                        # 连锁爆炸最大层数（防无限递归卡死）
 const SPAWN_MIN_DIST := 280.0               # 怪物生成点离玩家的最小距离（防出生贴脸）
 
@@ -57,15 +57,16 @@ const BOSS_SPAWN_TIME := 120.0
 # 10 关：普通波/精英波沿用刷怪导演曲线（mix 控制出怪比例），BOSS 关暂停常规刷怪单刷 BOSS
 const WAVE_TABLE := [
 	# min_interval=刷怪间隔下限（峰值兜底防满屏）；big_cap=大兽同屏上限（满额转小怪）
-	{"wave": 1,  "type": "normal", "duration": 30.0, "mix": {"small": 1.0}, "min_interval": 0.55, "big_cap": 0},
-	# V0.8 任务书 B2：真机反馈"满屏堵路"根因关 → 大兽 65%→40% 穿插 + 峰值兜底 0.50s + 大兽同屏 ≤8
-	{"wave": 2,  "type": "elite",  "duration": 30.0, "mix": {"small": 0.60, "big": 0.40}, "min_interval": 0.50, "big_cap": 8},
+	# V0.8.1 实机反馈"还是太多"：全表间隔下限放缓 + 大兽占比/上限下调（单点可调，随时按反馈再拧）
+	{"wave": 1,  "type": "normal", "duration": 30.0, "mix": {"small": 1.0}, "min_interval": 0.85, "big_cap": 0},
+	# 大兽 25% 穿插 + 峰值兜底 0.80s + 大兽同屏 ≤5
+	{"wave": 2,  "type": "elite",  "duration": 30.0, "mix": {"small": 0.75, "big": 0.25}, "min_interval": 0.80, "big_cap": 5},
 	{"wave": 3,  "type": "boss",   "duration": 60.0, "boss_id": "boss1"},
-	{"wave": 4,  "type": "elite",  "duration": 35.0, "mix": {"small": 0.5, "big": 0.5}, "min_interval": 0.45, "big_cap": 10, "airdrop": true},
+	{"wave": 4,  "type": "elite",  "duration": 35.0, "mix": {"small": 0.70, "big": 0.30}, "min_interval": 0.75, "big_cap": 6, "airdrop": true},
 	{"wave": 5,  "type": "boss",   "duration": 60.0, "boss_id": "boss2"},
-	{"wave": 6,  "type": "elite",  "duration": 35.0, "mix": {"small": 0.45, "big": 0.55}, "min_interval": 0.42, "big_cap": 12, "airdrop": true},
+	{"wave": 6,  "type": "elite",  "duration": 35.0, "mix": {"small": 0.65, "big": 0.35}, "min_interval": 0.70, "big_cap": 7, "airdrop": true},
 	{"wave": 7,  "type": "boss",   "duration": 60.0, "boss_id": "boss3"},
-	{"wave": 8,  "type": "elite",  "duration": 40.0, "mix": {"small": 0.35, "big": 0.65}, "min_interval": 0.40, "big_cap": 14, "airdrop": true},
+	{"wave": 8,  "type": "elite",  "duration": 40.0, "mix": {"small": 0.60, "big": 0.40}, "min_interval": 0.65, "big_cap": 8, "airdrop": true},
 	{"wave": 9,  "type": "boss",   "duration": 60.0, "boss_id": "boss4"},
 	{"wave": 10, "type": "boss",   "duration": 90.0, "boss_id": "boss5"},
 ]

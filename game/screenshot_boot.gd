@@ -73,7 +73,7 @@ func _run_sequence() -> void:
 	await get_tree().create_timer(0.5, true).timeout
 	await _shot("04b_hp_low_shield")
 
-	# 4c. V0.8 第 2 关节奏：虚拟推进 25s（大兽 40% 穿刺 + 同屏硬上限 45 + 大兽≤8，对比 V0.7 满屏堵路）
+	# 4c. V0.8.1 第 2 关节奏：虚拟推进 25s（大兽 25% 穿插 + 同屏硬上限 26 + 大兽≤5，实机反馈"还是太多"再收敛）
 	main.wave_manager._begin_wave(2)
 	for i in 1250:
 		main.spawner._physics_process(0.02)

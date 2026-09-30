@@ -13,7 +13,7 @@ var enabled := false
 var elapsed := 0.0                    # 全局累计（结算统计/无 mix 兜底曲线用）
 var wave_local := 0.0                 # 本关已过时间（每关重置——V0.8 B1 核心）
 var wave_duration := 30.0             # 本关时长（wave_manager 下发）
-var wave_min_interval := 0.55         # 本关刷怪间隔下限（峰值兜底，防满屏）
+var wave_min_interval := 0.85         # 本关刷怪间隔下限（峰值兜底，防满屏；wave_manager 每关下发）
 var wave_big_cap := -1                # 大兽同屏上限（<0 = 不限制；满额转小怪）
 var wave_rate_cap := 2.2              # 每秒生成率上限（普通 2.2 / 精英 3.0；兜底不常触发）
 var max_monsters := 60                # 同屏总数上限（精英关由 wave_manager 下调为 MAX_MONSTERS_ELITE）
@@ -63,8 +63,8 @@ func _physics_process(delta: float) -> void:
 	_spawn_cd -= delta
 	if _spawn_cd <= 0.0:
 		_spawn_cd = _current_interval()
-		# 批量：本关前 20s 单只，之后按本关进度批量（V0.8 B1：原全局 30s 步进跨关爆炸）
-		var batch := 1 + int(wave_local / 20.0)
+		# 批量：本关前 30s 单只，之后按本关进度批量（V0.8.1 实机反馈：20s 步进太快，30s 关几乎全程单只）
+		var batch := 1 + int(wave_local / 30.0)
 		for i in batch:
 			if get_tree().get_nodes_in_group("monsters").size() >= max_monsters:
 				break
@@ -75,10 +75,11 @@ func _physics_process(delta: float) -> void:
 			spawn_monster(kind, _pick_spawn_pos())
 
 
-## 刷怪间隔曲线：1.15s → 0.22s 按本关进度收紧（幂 0.78），min_interval 与生成率上限双兜底
+## 刷怪间隔曲线：1.15s → 0.35s 按本关进度收紧（幂 0.78），min_interval 与生成率上限双兜底
+## （V0.8.1：尾值 0.22→0.35，中期收紧更缓；实际峰值由关表 min_interval 决定）
 func _current_interval() -> float:
 	var t := clampf(wave_local / wave_duration, 0.0, 1.0)
-	return maxf(maxf(lerpf(1.15, 0.22, pow(t, 0.78)), wave_min_interval), 1.0 / wave_rate_cap)
+	return maxf(maxf(lerpf(1.15, 0.35, pow(t, 0.78)), wave_min_interval), 1.0 / wave_rate_cap)
 
 
 ## 大兽同屏计数（big_cap 用）

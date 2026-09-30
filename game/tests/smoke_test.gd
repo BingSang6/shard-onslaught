@@ -948,10 +948,11 @@ func _t_wave2_density() -> void:
 	for m in monsters:
 		if m.monster_id == "big":
 			bigs += 1
-	check(monsters.size() <= 45, "第 2 关 30s 生成 %d 只 ≤ 45（V0.7 约 70）" % monsters.size())
+	check(monsters.size() <= GameConfig.MAX_MONSTERS_ELITE,
+		"第 2 关 30s 生成 %d 只 ≤ %d（V0.8.1 密度收敛，V0.7 约 70/V0.8 上限 45）" % [monsters.size(), GameConfig.MAX_MONSTERS_ELITE])
 	check(bigs <= int(GameConfig.WAVE_TABLE[1]["big_cap"]),
 		"大兽同屏 %d ≤ 上限 %d（满额转小怪）" % [bigs, int(GameConfig.WAVE_TABLE[1]["big_cap"])])
-	check(main.spawner.max_monsters == GameConfig.MAX_MONSTERS_ELITE, "精英关同屏硬上限 45 已下发")
+	check(main.spawner.max_monsters == GameConfig.MAX_MONSTERS_ELITE, "精英关同屏硬上限已下发")
 
 
 func _t_wave_local_reset() -> void:
@@ -971,7 +972,7 @@ func _t_wave_local_reset() -> void:
 	check(absf(fresh - 1.15) < 0.05, "第 2 关开局 interval 重置 ≈1.15s（实际 %.2fs，不继承上一关收紧值）" % fresh)
 	check(main.spawner.wave_local == 0.0
 		and main.spawner.wave_min_interval == float(GameConfig.WAVE_TABLE[1]["min_interval"]),
-		"本关计时清零 + 峰值下限 0.50s 下发")
+		"本关计时清零 + 新关峰值下限 %.2fs 下发" % float(GameConfig.WAVE_TABLE[1]["min_interval"]))
 
 
 func _t_bullet_speed_evolution() -> void:

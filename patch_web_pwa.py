@@ -13,6 +13,10 @@ Web 构建后处理：给 PWA 加自动更新能力（gh-pages 快速迭代部�
 2. index.html 注入 <script>
    - 页面加载时主动调 registration.update()（绕过 24h 节流，立即检查新版）
    - 监听 controllerchange 自动刷新一次（sessionStorage 防循环）
+3. index.html 注入 <script>（V0.8.1）
+   - iOS/iPadOS Safari WebAudio 解锁：包装 AudioContext 构造器追踪引擎上下文，
+     首次用户手势内同步 resume()（iOS 要求 resume 在手势同步调用栈内，
+     引擎自身从 WASM 回调里 resume 会被 Safari 无视 → 全程无声）
 
 用法：python patch_web_pwa.py   （在 gcj 根目录，导出后、push gh-pages 前执行）
 """
@@ -74,6 +78,44 @@ def main() -> int:
         "\t</script>"
     )
     ok &= patch("index.html", "</head>", snippet + "\n</head>", "index.html: 自动更新脚本", "_sw_reloaded")
+    # 3. index.html：iOS/iPadOS Safari WebAudio 解锁（V0.8.1）
+    #    根因：引擎只在 WASM 内部（事件回调后）调 ctx.resume()，而 iOS Safari 要求
+    #    resume 必须发生在用户手势的【同步调用栈】内，否则上下文一直 suspended → 全程无声。
+    #    修法：在引擎加载前包装 AudioContext 构造器追踪引擎创建的上下文，
+    #    首次触摸/点击同步 resume（后台切回时补一次）。Android/桌面不受影响。
+    unlock = (
+        "<script>\n"
+        "\t// __audioUnlockTracked iOS WebAudio 解锁（patch_web_pwa.py 注入）：追踪引擎 AudioContext，首次手势内同步 resume\n"
+        "\t(function () {\n"
+        "\t\tvar tracked = [];\n"
+        "\t\tfunction wrap(name) {\n"
+        "\t\t\tvar Native = window[name];\n"
+        "\t\t\tif (!Native) { return; }\n"
+        "\t\t\tfunction Shim() {\n"
+        "\t\t\t\tvar ctx;\n"
+        "\t\t\t\ttry { ctx = new Native(...arguments); } catch (e) { ctx = new Native(); }\n"
+        "\t\t\t\ttracked.push(ctx);\n"
+        "\t\t\t\treturn ctx;\n"
+        "\t\t\t}\n"
+        "\t\t\tShim.prototype = Native.prototype;\n"
+        "\t\t\twindow[name] = Shim;\n"
+        "\t\t}\n"
+        "\t\twrap('AudioContext');\n"
+        "\t\twrap('webkitAudioContext');\n"
+        "\t\tfunction unlock() {\n"
+        "\t\t\tfor (var i = 0; i < tracked.length; i++) {\n"
+        "\t\t\t\tvar c = tracked[i];\n"
+        "\t\t\t\tif (c && c.state === 'suspended' && c.resume) { try { c.resume(); } catch (e) {} }\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t\t['touchstart', 'touchend', 'click', 'mousedown', 'keydown', 'pointerup'].forEach(function (ev) {\n"
+        "\t\t\twindow.addEventListener(ev, unlock, { passive: true });\n"
+        "\t\t});\n"
+        "\t\tdocument.addEventListener('visibilitychange', function () { if (!document.hidden) { unlock(); } });\n"
+        "\t})();\n"
+        "\t</script>"
+    )
+    ok &= patch("index.html", "</head>", unlock + "\n</head>", "index.html: iOS 音频解锁", "__audioUnlockTracked")
     print("结果:", "全部成功" if ok else "存在失败，禁止直接部署！")
     return 0 if ok else 1
 
