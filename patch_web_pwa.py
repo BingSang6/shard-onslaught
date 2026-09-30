@@ -101,14 +101,19 @@ def main() -> int:
         "\t</script>"
     )
     ok &= patch("index.html", "</head>", snippet + "\n</head>", "index.html: 自动更新脚本", "_sw_reloaded")
-    # 3. index.html：iOS/iPadOS Safari WebAudio 解锁（V0.8.1）
+    # 3. index.html：移动端 WebAudio 解锁（V0.8.1 引入，V0.8.3 强化）
     #    根因：引擎只在 WASM 内部（事件回调后）调 ctx.resume()，而 iOS Safari 要求
     #    resume 必须发生在用户手势的【同步调用栈】内，否则上下文一直 suspended → 全程无声。
     #    修法：在引擎加载前包装 AudioContext 构造器追踪引擎创建的上下文，
-    #    首次触摸/点击同步 resume（后台切回时补一次）。Android/桌面不受影响。
+    #    首次触摸/点击同步 resume（后台切回时补一次）。
+    #    V0.8.3 强化（用户反馈 Android 也无声）：①事件加 pointerdown/pointerup 且全部
+    #    capture 阶段（部分安卓内核 pointer 先于 touch、页面库可能拦截冒泡）②resume
+    #    条件放宽到非 closed（iOS 电话打断后的 interrupted 态也能救回）③resume 返回的
+    #    promise 静默 catch（防 unhandled rejection）④开局 120s 内每 2s 自愈检查 +
+    #    pageshow（bfcache 恢复）兜底——真机实测某旁路挂起态无事件可救。
     unlock = (
         "<script>\n"
-        "\t// __audioUnlockTracked iOS WebAudio 解锁（patch_web_pwa.py 注入）：追踪引擎 AudioContext，首次手势内同步 resume\n"
+        "\t// __audioUnlockTracked 移动端 WebAudio 解锁（patch_web_pwa.py 注入）：追踪引擎 AudioContext，手势内同步 resume\n"
         "\t(function () {\n"
         "\t\tvar tracked = [];\n"
         "\t\tfunction wrap(name) {\n"
@@ -128,13 +133,26 @@ def main() -> int:
         "\t\tfunction unlock() {\n"
         "\t\t\tfor (var i = 0; i < tracked.length; i++) {\n"
         "\t\t\t\tvar c = tracked[i];\n"
-        "\t\t\t\tif (c && c.state === 'suspended' && c.resume) { try { c.resume(); } catch (e) {} }\n"
+        "\t\t\t\tif (c && c.state !== 'closed' && c.resume) {\n"
+        "\t\t\t\t\ttry { var p = c.resume(); if (p && p.catch) { p.catch(function () {}); } } catch (e) {}\n"
+        "\t\t\t\t}\n"
         "\t\t\t}\n"
         "\t\t}\n"
-        "\t\t['touchstart', 'touchend', 'click', 'mousedown', 'keydown', 'pointerup'].forEach(function (ev) {\n"
-        "\t\t\twindow.addEventListener(ev, unlock, { passive: true });\n"
+        "\t\t['touchstart', 'touchend', 'pointerdown', 'pointerup', 'click', 'mousedown', 'keydown'].forEach(function (ev) {\n"
+        "\t\t\twindow.addEventListener(ev, unlock, { passive: true, capture: true });\n"
         "\t\t});\n"
         "\t\tdocument.addEventListener('visibilitychange', function () { if (!document.hidden) { unlock(); } });\n"
+        "\t\twindow.addEventListener('pageshow', function (ev) { if (ev.persisted) { unlock(); } });\n"
+        "\t\tvar healUntil = Date.now() + 120000;\n"
+        "\t\tvar heal = setInterval(function () {\n"
+        "\t\t\tif (Date.now() > healUntil) { clearInterval(heal); return; }\n"
+        "\t\t\tfor (var i = 0; i < tracked.length; i++) {\n"
+        "\t\t\t\tvar c = tracked[i];\n"
+        "\t\t\t\tif (c && c.state === 'suspended' && c.resume) {\n"
+        "\t\t\t\t\ttry { var p = c.resume(); if (p && p.catch) { p.catch(function () {}); } } catch (e) {}\n"
+        "\t\t\t\t}\n"
+        "\t\t\t}\n"
+        "\t\t}, 2000);\n"
         "\t})();\n"
         "\t</script>"
     )
