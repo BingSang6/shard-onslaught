@@ -21,6 +21,18 @@ GameEvents="*res://scripts/core/game_events.gd"
 GameData="*res://scripts/core/game_data.gd"
 SoundManager="*res://scripts/core/sound_manager.gd"
 
+[audio]
+
+# V0.8.4 Web 无声排查结论（推翻前期两条猜测，真因见 sound_manager.gd）：
+# 实测 4.7.2 Web 导出上运行时创建的 AudioStreamWAV 仍走 Sample 播放路径
+# （AudioBufferSourceNode 直连总线增益图），default_playback_type 全局值对它不生效；
+# 真因是升级/结算面板暂停场景树后，Web 端 Sample 播放的恢复路径损坏，
+# 节点永久卡在 isPaused 状态而全场静音。修复手段是 SoundManager 设 PROCESS_MODE_ALWAYS 加看门狗。
+# 以下两项保留：playback_type 语义上仍指向 Stream（对导入型资源有效）；
+# 总线布局预定义则是良好实践，sound_manager 仅在布局缺失时兜底动态建总线。
+general/default_playback_type=1
+buses/default_bus_layout="res://default_bus_layout.tres"
+
 [display]
 
 window/size/viewport_width=720

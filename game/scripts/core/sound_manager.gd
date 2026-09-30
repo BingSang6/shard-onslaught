@@ -15,6 +15,8 @@ var _pool: Array[AudioStreamPlayer] = []
 var _bgm_player: AudioStreamPlayer
 # 节流表（id -> 上次播放的毫秒时间戳）
 var _last_play := {}
+# 兜底动态创建的总线名（布局文件提供的总线不在此列，退出时不清理）
+var _dynamic_buses: Array[String] = []
 # 节流间隔（毫秒）：高频音效防刷屏
 const THROTTLE := {"shot": 45, "hit": 60, "xp": 60, "click": 40, "kill": 25}
 
@@ -27,6 +29,33 @@ func _ready() -> void:
 	_apply_mute(GameData.muted)
 	# BGM 合成量大（~130 万样本），延迟一帧执行避免拖启动
 	_start_bgm_deferred.call_deferred()
+	# V0.8.4 Web 无声根因修复：升级/结算面板会 get_tree().paused = true（main.gd），
+	# 本单例原先随树暂停 → 引擎给所有播放器下 stream_paused；Web 导出上 Sample 播放
+	# 的暂停是 AudioBufferSourceNode.stop()，恢复路径损坏（实测节点永久 isPaused=true，
+	# 手动 _unpause 后立即恢复发声），首次弹面板后全局静音——桌面原生路径不受影响。
+	# PROCESS_MODE_ALWAYS 让播放器不随树暂停：面板期间 BGM/按钮音继续播（本就是惯例），
+	# 同时彻底绕开该引擎 bug。
+	process_mode = Node.PROCESS_MODE_ALWAYS
+
+
+# 看门狗帧计数（每 30 帧查一次播放器 stream_paused，防引擎/平台路径再度挂起）
+var _wd_frames := 0
+
+
+func _process(_delta: float) -> void:
+	# V0.8.4 兜底：Web 上 Sample 播放的恢复路径若再被其它路径弄断（节点卡 isPaused），
+	# 引擎侧对应 AudioStreamPlayer.stream_paused 会停在 true——每半秒巡检一次，
+	# 树未暂停时强制拉回 false，保证不再出现"游戏在跑却全场静音"。
+	_wd_frames += 1
+	if _wd_frames % 30 != 0:
+		return
+	if get_tree().paused:
+		return
+	if _bgm_player != null and _bgm_player.stream_paused:
+		_bgm_player.stream_paused = false
+	for p in _pool:
+		if p.stream_paused:
+			p.stream_paused = false
 
 
 func _exit_tree() -> void:
@@ -38,21 +67,28 @@ func _exit_tree() -> void:
 		_bgm_player.stop()
 		_bgm_player.stream = null
 	_samples.clear()
-	for bus_name in ["SFX", "Music"]:
+	# V0.8.4：只移除兜底动态创建的总线；布局文件的总线生命周期归引擎管
+	for bus_name in _dynamic_buses:
 		var idx := AudioServer.get_bus_index(bus_name)
 		if idx >= 0:
 			AudioServer.remove_bus(idx)
+	_dynamic_buses.clear()
 
 
 # ================= 总线与播放器 =================
 
 func _build_buses() -> void:
-	# 运行时创建 SFX / Music 总线（免 default_bus_layout.tres，保持全代码风格）
+	# V0.8.4：总线优先由 default_bus_layout.tres 预定义（随包加载、语义与桌面一致）；
+	# 此处仅兜底：布局未加载（如裸跑测试场景）时才动态创建，
+	# 并记录进 _dynamic_buses 以便退出清理。
 	for bus_name in ["SFX", "Music"]:
+		if AudioServer.get_bus_index(bus_name) >= 0:
+			continue
 		var idx := AudioServer.bus_count
 		AudioServer.add_bus(idx)
 		AudioServer.set_bus_name(idx, bus_name)
 		AudioServer.set_bus_send(idx, "Master")
+		_dynamic_buses.append(bus_name)
 
 
 func _build_pool() -> void:

@@ -37,6 +37,9 @@ import sys
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "game", "build", "web")
 
+# 当前 Web 产物版本号：随音频诊断弹窗展示给玩家，用于确认 PWA 是否已更新到新版
+PWA_VERSION = "V0.8.4"
+
 
 def patch(path: str, anchor: str, replacement: str, desc: str, marker: str) -> bool:
     fp = os.path.join(WEB, path)
@@ -153,6 +156,29 @@ def main() -> int:
         "\t\t\t\t}\n"
         "\t\t\t}\n"
         "\t\t}, 2000);\n"
+        "\t\t// __audioDiagReport 真机音频遥测（V0.8.4）：首次手势 30s 后弹一次诊断框，内容含版本号\n"
+        "\t\t// ——同时解决两个盲区：确认 PWA 真的更新到了新版（弹窗即证明）、拿到真机的 ctx 状态\n"
+        "\t\tvar reported = false;\n"
+        "\t\tfunction report() {\n"
+        "\t\t\tif (reported) { return; }\n"
+        "\t\t\treported = true;\n"
+        "\t\t\tsetTimeout(function () {\n"
+        "\t\t\t\tvar states = [];\n"
+        "\t\t\t\tfor (var i = 0; i < tracked.length; i++) { states.push(tracked[i].state); }\n"
+        "\t\t\t\tvar mode = 'browser';\n"
+        "\t\t\t\ttry { if (window.matchMedia && matchMedia('(display-mode: standalone)').matches) { mode = 'PWA'; } } catch (e) {}\n"
+        "\t\t\t\tvar wk = 0;\n"
+        "\t\t\t\ttry { wk = performance.getEntriesByType('resource').filter(function (e) { return /worklet/.test(e.name); }).length; } catch (e) {}\n"
+        "\t\t\t\talert('[碎晶突围 音频诊断 " + PWA_VERSION + "]\\n'\n"
+        "\t\t\t\t\t+ '运行模式: ' + mode + '\\n'\n"
+        "\t\t\t\t\t+ '音频上下文: ' + (tracked.length ? tracked.length + ' 个 [' + states.join(',') + ']' : '未创建') + '\\n'\n"
+        "\t\t\t\t\t+ '音频组件(worklet)加载: ' + (wk > 0 ? wk + ' 个' : '0 个(异常!)') + '\\n'\n"
+        "\t\t\t\t\t+ '若无声请截图本弹窗发给开发者');\n"
+        "\t\t\t}, 30000);\n"
+        "\t\t}\n"
+        "\t\t['touchstart', 'pointerdown', 'click', 'mousedown'].forEach(function (ev) {\n"
+        "\t\t\twindow.addEventListener(ev, function () { report(); }, { once: true, capture: true, passive: true });\n"
+        "\t\t});\n"
         "\t})();\n"
         "\t</script>"
     )
@@ -170,9 +196,9 @@ def main() -> int:
     ok &= patch(
         "index.service.worker.js",
         "&& key !== CACHE_NAME).map(",
-        "&& key !== CACHE_NAME && key !== ENGINE_CACHE_NAME).map( // keep-engine-cache：清理旧版本缓存时保留引擎缓存",
+        "&& key !== CACHE_NAME && key !== ENGINE_CACHE_NAME).map(",  # keep-engine-cache：清理旧缓存时保留引擎缓存（注释不进注入文本，防行内注释吞掉后续代码）
         "SW: activate 清理保留引擎缓存",
-        "keep-engine-cache",
+        "ENGINE_CACHE_NAME).map(",
     )
     ok &= patch(
         "index.service.worker.js",
