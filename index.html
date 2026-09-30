@@ -154,6 +154,29 @@ body {
 				}
 			}
 		}, 2000);
+		// __audioDiagReport 真机音频遥测（V0.8.4）：首次手势 30s 后弹一次诊断框，内容含版本号
+		// ——同时解决两个盲区：确认 PWA 真的更新到了新版（弹窗即证明）、拿到真机的 ctx 状态
+		var reported = false;
+		function report() {
+			if (reported) { return; }
+			reported = true;
+			setTimeout(function () {
+				var states = [];
+				for (var i = 0; i < tracked.length; i++) { states.push(tracked[i].state); }
+				var mode = 'browser';
+				try { if (window.matchMedia && matchMedia('(display-mode: standalone)').matches) { mode = 'PWA'; } } catch (e) {}
+				var wk = 0;
+				try { wk = performance.getEntriesByType('resource').filter(function (e) { return /worklet/.test(e.name); }).length; } catch (e) {}
+				alert('[碎晶突围 音频诊断 V0.8.4]\n'
+					+ '运行模式: ' + mode + '\n'
+					+ '音频上下文: ' + (tracked.length ? tracked.length + ' 个 [' + states.join(',') + ']' : '未创建') + '\n'
+					+ '音频组件(worklet)加载: ' + (wk > 0 ? wk + ' 个' : '0 个(异常!)') + '\n'
+					+ '若无声请截图本弹窗发给开发者');
+			}, 30000);
+		}
+		['touchstart', 'pointerdown', 'click', 'mousedown'].forEach(function (ev) {
+			window.addEventListener(ev, function () { report(); }, { once: true, capture: true, passive: true });
+		});
 	})();
 	</script>
 </head>
@@ -174,7 +197,7 @@ body {
 
 		<script src="index.js"></script>
 		<script>
-const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":2755732,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4,"serviceWorker":"index.service.worker.js"};
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":2758492,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4,"serviceWorker":"index.service.worker.js"};
 const GODOT_THREADS_ENABLED = false;
 const engine = new Engine(GODOT_CONFIG);
 

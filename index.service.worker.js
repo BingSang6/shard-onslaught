@@ -4,7 +4,7 @@
 // Incrementing CACHE_VERSION will kick off the install event and force
 // previously cached resources to be updated from the network.
 /** @type {string} */
-const CACHE_VERSION = '1790761623|10558484';
+const CACHE_VERSION = '1790771382|5712066';
 /** @type {string} */
 const CACHE_PREFIX = '碎晶突围-sw-cache-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
@@ -32,7 +32,7 @@ self.addEventListener('activate', (event) => {
 	event.waitUntil(caches.keys().then(
 		function (keys) {
 			// Remove old caches.
-			return Promise.all(keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME && key !== ENGINE_CACHE_NAME).map( // keep-engine-cache：清理旧版本缓存时保留引擎缓存(key) => caches.delete(key)));
+			return Promise.all(keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME && key !== ENGINE_CACHE_NAME).map((key) => caches.delete(key)));
 		}
 	).then(function () {
 		// Enable navigation preload if available.
