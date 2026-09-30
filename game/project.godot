@@ -1,5 +1,11 @@
 ; Engine configuration file.
-; 《碎晶突围》Godot 4 工程配置：竖屏 720x1280，gl_compatibility 渲染器（WebGL 兼容）
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
 config_version=5
 
 [application]
@@ -22,6 +28,10 @@ window/size/viewport_height=1280
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/handheld/orientation=1
+
+[gui]
+
+theme/custom="res://assets/fonts/game_theme.tres"
 
 [input]
 
@@ -60,7 +70,3 @@ dash={
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.031373, 0.031373, 0.094118, 1)
-
-[gui]
-
-theme/custom="res://assets/fonts/game_theme.tres"

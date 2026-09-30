@@ -17,9 +17,20 @@ Web 构建后处理：给 PWA 加自动更新能力（gh-pages 快速迭代部�
    - iOS/iPadOS Safari WebAudio 解锁：包装 AudioContext 构造器追踪引擎上下文，
      首次用户手势内同步 resume()（iOS 要求 resume 在手势同步调用栈内，
      引擎自身从 WASM 回调里 resume 会被 Safari 无视 → 全程无声）
+4. index.service.worker.js（V0.8.2）：wasm 内容寻址引擎缓存
+   - Godot SW 按 CACHE_VERSION 整包换缓存：每次部署（哪怕只改 pck）都会删掉
+     39.5MB（gzip 10.2MB）一个字节都没变的 index.wasm 强制重下 → 更新一次 ~13MB
+   - ENGINE_CACHE_NAME = 前缀 + sha256(index.wasm)[:16]，内容不变 key 不变，
+     activate 清理旧缓存时保留 → wasm 跨版本复用，常规更新下载量 13MB → ~3MB；
+     引擎升级（wasm 变）时 key 变化自动全量重下，无新旧错配风险
+5. index.html 注入 <script>（V0.8.2）：更新体验
+   - controllerchange 自动刷新加 20s 开局保护：加载慢的弱网下更新常在开局
+     几十秒后才就绪，此时玩家已在局中，不再强制重载（下次启动生效）
+   - visibilitychange 切回前台补一次 update()（PWA 常驻后台场景）
 
 用法：python patch_web_pwa.py   （在 gcj 根目录，导出后、push gh-pages 前执行）
 """
+import hashlib
 import io
 import os
 import sys
@@ -46,6 +57,10 @@ def patch(path: str, anchor: str, replacement: str, desc: str, marker: str) -> b
 def main() -> int:
     print(f"补丁目标: {WEB}")
     ok = True
+    # V0.8.2 引擎缓存签名：wasm 内容不变 → key 不变 → 跨版本复用（补丁 4 用）
+    with open(os.path.join(WEB, "index.wasm"), "rb") as f:
+        wasm_sig = hashlib.sha256(f.read()).hexdigest()[:16]
+    print(f"index.wasm sha256[:16] = {wasm_sig}（引擎缓存 key，引擎升级才会变）")
     # 1. SW：install 立即接管 + activate 立即认领客户端
     ok &= patch(
         "index.service.worker.js",
@@ -62,15 +77,23 @@ def main() -> int:
         "self.clients.claim();",
     )
     # 2. index.html：加载即检查更新 + controllerchange 自动刷新
+    #    V0.8.2：刷新加 20s 开局保护（弱网下更新就绪时玩家多半已在局中，不打断）；
+    #    切回前台补一次 update 检查（PWA 常驻后台，绕过 24h SW 脚本节流）
     snippet = (
         "<script>\n"
-        "\t// PWA 自动更新（patch_web_pwa.py 注入）：加载即检查新版，新 SW 接管后自动刷新一次\n"
+        "\t// PWA 自动更新（patch_web_pwa.py 注入）：加载即检查新版；新 SW 接管后自动刷新一次\n"
         "\tif ('serviceWorker' in navigator) {\n"
+        "\t\tvar bootAt = performance.now();\n"
         "\t\tnavigator.serviceWorker.register('index.service.worker.js').then(function (reg) {\n"
         "\t\t\treturn reg.update();\n"
         "\t\t}).catch(function () {});\n"
+        "\t\tdocument.addEventListener('visibilitychange', function () {\n"
+        "\t\t\tif (document.hidden) { return; }\n"
+        "\t\t\tnavigator.serviceWorker.getRegistration().then(function (r) { if (r) { r.update().catch(function () {}); } }).catch(function () {});\n"
+        "\t\t});\n"
         "\t\tnavigator.serviceWorker.addEventListener('controllerchange', function () {\n"
         "\t\t\tif (sessionStorage.getItem('_sw_reloaded') === '1') { return; }\n"
+        "\t\t\tif (performance.now() - bootAt > 20000) { return; }\n"
         "\t\t\tsessionStorage.setItem('_sw_reloaded', '1');\n"
         "\t\t\tlocation.reload();\n"
         "\t\t});\n"
@@ -116,6 +139,38 @@ def main() -> int:
         "\t</script>"
     )
     ok &= patch("index.html", "</head>", unlock + "\n</head>", "index.html: iOS 音频解锁", "__audioUnlockTracked")
+    # 4. SW（V0.8.2）：wasm 内容寻址引擎缓存——四锚点改道，常规更新不再重下 39.5MB wasm
+    ok &= patch(
+        "index.service.worker.js",
+        "const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;",
+        "const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;\n"
+        "// engine-wasm-cache（patch_web_pwa.py 注入）：wasm 内容寻址缓存，key=sha256(index.wasm)[:16]，跨 CACHE_VERSION 复用\n"
+        "const ENGINE_CACHE_NAME = CACHE_PREFIX + 'engine-" + wasm_sig + "';",
+        "SW: wasm 引擎缓存声明",
+        "engine-wasm-cache",
+    )
+    ok &= patch(
+        "index.service.worker.js",
+        "&& key !== CACHE_NAME).map(",
+        "&& key !== CACHE_NAME && key !== ENGINE_CACHE_NAME).map( // keep-engine-cache：清理旧版本缓存时保留引擎缓存",
+        "SW: activate 清理保留引擎缓存",
+        "keep-engine-cache",
+    )
+    ok &= patch(
+        "index.service.worker.js",
+        "const cache = await caches.open(CACHE_NAME);",
+        "const cache = await caches.open(local === 'index.wasm' ? ENGINE_CACHE_NAME : CACHE_NAME); // engine-cache-lookup：wasm 走引擎缓存",
+        "SW: wasm 请求改走引擎缓存",
+        "engine-cache-lookup",
+    )
+    ok &= patch(
+        "index.service.worker.js",
+        "const fullCache = await Promise.all(FULL_CACHE.map((name) => cache.match(name)));",
+        "const ecache = await caches.open(ENGINE_CACHE_NAME); // engine-cache-fullcheck：离线完整判定也认引擎缓存里的 wasm\n"
+        "\t\t\t\t\tconst fullCache = await Promise.all(FULL_CACHE.map((name) => (name === 'index.wasm' ? ecache : cache).match(name)));",
+        "SW: 离线完整缓存判定含引擎缓存",
+        "engine-cache-fullcheck",
+    )
     print("结果:", "全部成功" if ok else "存在失败，禁止直接部署！")
     return 0 if ok else 1
 
