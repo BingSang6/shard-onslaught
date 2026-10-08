@@ -13,6 +13,8 @@ var muted := false                           # 静音开关（阶段4：SoundMan
 var max_wave := 0                            # 波次制：历史最高到达关卡（1~10）
 var cleared_all := false                     # 通关第 10 关标识
 var auto_upgrade := false                    # 自动升级开关（升级不弹窗，自动学推荐）
+var unlocked_skins: Array = [GameConfig.SKIN_DEFAULT]   # 皮肤：已拥有 id（默认皮肤免费）
+var equipped_skin: String = GameConfig.SKIN_DEFAULT     # 皮肤：当前装备 id（纯外观）
 
 
 func _ready() -> void:
@@ -45,6 +47,15 @@ func load_save() -> void:
 	unlocked_monsters = []
 	for item in parsed.get("unlock_monster", []):
 		unlocked_monsters.append(str(item))
+	# V0.8.6 皮肤：旧档缺省回落默认皮肤；装备 id 失效（配置改名等）也回落，防白屏
+	unlocked_skins = [GameConfig.SKIN_DEFAULT]
+	for item in parsed.get("unlocked_skins", []):
+		var sid := str(item)
+		if GameConfig.SKINS.has(sid) and not unlocked_skins.has(sid):
+			unlocked_skins.append(sid)
+	equipped_skin = str(parsed.get("equipped_skin", GameConfig.SKIN_DEFAULT))
+	if not GameConfig.SKINS.has(equipped_skin) or not unlocked_skins.has(equipped_skin):
+		equipped_skin = GameConfig.SKIN_DEFAULT
 
 
 ## 保存存档（每局结算时调用）
@@ -57,6 +68,8 @@ func save_game() -> void:
 		"max_wave": max_wave,
 		"cleared_all": cleared_all,
 		"auto_upgrade": auto_upgrade,
+		"unlocked_skins": unlocked_skins.duplicate(),
+		"equipped_skin": equipped_skin,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -123,5 +136,35 @@ func try_upgrade(key: String) -> bool:
 		return false
 	crystal_core -= GameConfig.perm_upgrade_cost(key, get_upgrade_lv(key))
 	permanent_upgrades[key] = get_upgrade_lv(key) + 1
+	save_game()
+	return true
+
+
+# ---------------- 皮肤（V0.8.6：晶核购买，纯外观无属性）----------------
+
+## 是否已拥有
+func has_skin(id: String) -> bool:
+	return unlocked_skins.has(id)
+
+
+## 尝试购买：晶核足够 → 扣费 + 解锁 + 立即装备 + 存档。成功返回 true。
+func try_buy_skin(id: String) -> bool:
+	if has_skin(id) or not GameConfig.SKINS.has(id):
+		return false
+	var cost := int(GameConfig.SKINS[id]["cost"])
+	if crystal_core < cost:
+		return false
+	crystal_core -= cost
+	unlocked_skins.append(id)
+	equipped_skin = id
+	save_game()
+	return true
+
+
+## 切换装备（已拥有才生效）。成功返回 true。
+func equip_skin(id: String) -> bool:
+	if not has_skin(id):
+		return false
+	equipped_skin = id
 	save_game()
 	return true

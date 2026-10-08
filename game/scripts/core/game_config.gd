@@ -253,6 +253,19 @@ static func perm_upgrade_cost(key: String, cur_lv: int) -> int:
 	var cfg: Dictionary = PERM_UPGRADES.get(key, {})
 	return int(cfg.get("base_cost", 0)) + int(cfg.get("cost_step", 0)) * cur_lv
 
+# ---- 玩家皮肤（V0.8.6：纯色彩主题零新贴图——tint 染本体/辉光/拖尾，纯外观无属性）----
+# 经济参照：一局约 100~450◆（通关击破主宰翻倍可上 900◆）；定价 = 1~3 局一件
+# tint=本体染色（乘法调制，均 ≥0.3 保证不暗）；glow=光晕/微光/拖尾基色（青色原值即默认皮肤）
+const SKINS := {
+	"crystal": {"name": "晶蓝", "tint": Color(1.0, 1.0, 1.0), "glow": Color(0.04, 0.78, 0.87), "cost": 0},
+	"ember":   {"name": "赤焰", "tint": Color(1.0, 0.45, 0.32), "glow": Color(0.92, 0.20, 0.08), "cost": 80},
+	"jade":    {"name": "翠晶", "tint": Color(0.38, 1.0, 0.56), "glow": Color(0.05, 0.85, 0.35), "cost": 120},
+	"aurum":   {"name": "鎏金", "tint": Color(1.0, 0.85, 0.36), "glow": Color(0.95, 0.66, 0.05), "cost": 160},
+	"phantom": {"name": "幽紫", "tint": Color(0.74, 0.46, 1.0), "glow": Color(0.45, 0.15, 0.95), "cost": 200},
+	"sakura":  {"name": "绯樱", "tint": Color(1.0, 0.56, 0.80), "glow": Color(0.95, 0.25, 0.65), "cost": 240},
+}
+const SKIN_DEFAULT := "crystal"
+
 # ---- 经验曲线（战斗循环增强：8+5→14+9 拉陡，弹窗打断约 -35%）----
 static func xp_to_next(level: int) -> float:
 	return 14.0 + float(level - 1) * 9.0

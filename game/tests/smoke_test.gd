@@ -117,6 +117,7 @@ func _run_all() -> void:
 	await _t_wave2_density()
 	await _t_wave_local_reset()
 	await _t_bullet_speed_evolution()
+	await _t_skins()
 
 
 # ---------------- T1 状态机与刷怪 ----------------
@@ -1023,3 +1024,41 @@ func _t_bullet_speed_evolution() -> void:
 	main._on_upgrade_chosen("heal")
 	await tick(2)
 	check(main.state == 1, "U5 选卡后恢复战斗")
+
+
+func _t_skins() -> void:
+	force_resume()
+	print("\n[T34] 皮肤系统（购买/装备/染色生效/存档回读）")
+	var cores_bak := GameData.crystal_core
+	var skins_bak: Array = GameData.unlocked_skins.duplicate()
+	var equip_bak: String = GameData.equipped_skin
+	# 干净状态：默认皮肤免费拥有并装备，其余未解锁
+	GameData.unlocked_skins = [GameConfig.SKIN_DEFAULT]
+	GameData.equipped_skin = GameConfig.SKIN_DEFAULT
+	check(GameData.has_skin(GameConfig.SKIN_DEFAULT) and not GameData.has_skin("ember"),
+		"默认皮肤免费拥有，付费皮肤未解锁")
+	# 余额不足购买失败
+	GameData.crystal_core = 10
+	check(not GameData.try_buy_skin("ember"), "晶核不足购买失败")
+	# 购买成功：扣费 + 解锁 + 立即装备 + 存档
+	GameData.crystal_core = 500
+	check(GameData.try_buy_skin("ember"), "购买赤焰成功")
+	check(GameData.crystal_core == 500 - int(GameConfig.SKINS["ember"]["cost"]), "扣费 = 定价")
+	check(GameData.has_skin("ember") and GameData.equipped_skin == "ember", "购买即解锁并装备")
+	# 染色生效：玩家本体 modulate = 皮肤 tint（_apply_skin 接线）
+	main.player._apply_skin()
+	check(main.player._poly.modulate.is_equal_approx(GameConfig.SKINS["ember"]["tint"]),
+		"玩家本体已染皮肤色")
+	GameData.equip_skin(GameConfig.SKIN_DEFAULT)
+	main.player._apply_skin()
+	check(main.player._poly.modulate.is_equal_approx(Color.WHITE), "换回默认恢复无染色")
+	# 存档回读：购买与装备状态持久化
+	GameData.equip_skin("ember")
+	GameData.load_save()
+	check(GameData.equipped_skin == "ember" and GameData.has_skin("ember"), "存档回读保留皮肤")
+	# 还原现场（不污染其它用例的晶核/皮肤状态）
+	GameData.crystal_core = cores_bak
+	GameData.unlocked_skins = skins_bak.duplicate()
+	GameData.equipped_skin = equip_bak
+	main.player._apply_skin()
+	GameData.save_game()

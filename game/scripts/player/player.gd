@@ -52,6 +52,9 @@ var _dash_dir := Vector2.ZERO
 var _poly: Sprite2D
 var _idle_particles: GPUParticles2D
 var _trail: GPUParticles2D                   # 移动拖尾光
+var _halo_wide: Halo                         # V0.8.6 皮肤：外层光晕（换色用）
+var _halo: Halo                              # V0.8.6 皮肤：内层光晕
+var _skin_tint := Color.WHITE                # V0.8.6 皮肤：本体染色基色（闪白在其上叠加）
 var _prev_pos := Vector2.ZERO                # 上一物理帧位置（测速驱动拖尾）
 var _kb_vel := Vector2.ZERO                 # 受击退速度（衰减）
 
@@ -67,10 +70,10 @@ func _ready() -> void:
 	add_child(shape)
 
 	# 外发光光晕（霓虹辉光质感，双层：内层亮核 + 外层大范围柔光，垫在晶体下层）
-	var halo_wide := Halo.create(85.0, Color(0.04, 0.78, 0.87), 0.75)  # 视觉整改V2：光晕85配合放大后实体
-	add_child(halo_wide)
-	var halo := Halo.create(50.0, Color(0.04, 0.78, 0.87), 2.4)
-	add_child(halo)
+	_halo_wide = Halo.create(85.0, Color(0.04, 0.78, 0.87), 0.75)  # 视觉整改V2：光晕85配合放大后实体
+	add_child(_halo_wide)
+	_halo = Halo.create(50.0, Color(0.04, 0.78, 0.87), 2.4)
+	add_child(_halo)
 
 	# 晶体外观：设计稿透明 PNG（贴图自带辉光，Sprite2D 替代几何原型）
 	_poly = Sprite2D.new()
@@ -123,6 +126,24 @@ func _ready() -> void:
 
 	add_to_group("player")
 	monitoring = false
+	_apply_skin()
+
+
+## V0.8.6 应用装备皮肤（纯色彩主题零新贴图）：本体染色 + 双层光晕/微光/拖尾换色。
+## _ready 与 setup（每局开始，菜单里换装后生效）各调一次。
+func _apply_skin() -> void:
+	var cfg: Dictionary = GameConfig.SKINS.get(GameData.equipped_skin, {})
+	if cfg.is_empty():
+		return
+	_skin_tint = cfg["tint"]
+	var glow: Color = cfg["glow"]
+	_poly.modulate = _skin_tint
+	_halo_wide.material.set_shader_parameter("halo_color", glow)
+	_halo.material.set_shader_parameter("halo_color", glow)
+	(_idle_particles.process_material as ParticleProcessMaterial).color = \
+		Color(glow.lerp(Color.WHITE, 0.35), 0.5)
+	(_trail.process_material as ParticleProcessMaterial).color = \
+		Color(glow.lerp(Color.WHITE, 0.15), 0.55)
 
 
 ## 应用局外永久强化（PRD 2.4）并重置状态
@@ -149,15 +170,20 @@ func setup(p_skills: Node, perm: Dictionary, p_projectile_layer: Node2D) -> void
 	temp_weapon_id = ""
 	temp_weapon_time = 0.0
 	shield_charges = 0
+	_apply_skin()   # V0.8.6：每局开始重读装备皮肤（菜单换装后开局生效）
 
 
 func _physics_process(delta: float) -> void:
 	_iframe = maxf(0.0, _iframe - delta)
 	_dash_cd = maxf(0.0, _dash_cd - delta)
 	_hit_flash_t = maxf(0.0, _hit_flash_t - delta * 4.0)
-	# 受击闪白：贴图模式用 modulate 提亮衰减（替代原 shader flash 参数）
+	# 受击闪白：贴图模式用 modulate 提亮衰减（替代原 shader flash 参数）；
+	# V0.8.6 皮肤染色基色上叠亮（乘法保色相，高闪位趋近皮肤亮色而非纯白）
 	var hf := _hit_flash_t
-	_poly.modulate = Color(1.0 + 2.0 * hf, 1.0 + 2.0 * hf, 1.0 + 2.0 * hf)
+	_poly.modulate = Color(
+		_skin_tint.r * (1.0 + 2.0 * hf),
+		_skin_tint.g * (1.0 + 2.0 * hf),
+		_skin_tint.b * (1.0 + 2.0 * hf))
 	_kb_vel = _kb_vel.lerp(Vector2.ZERO, minf(1.0, delta * 8.0))
 	# BOSS 增益计时（到期清零）
 	if _buff_time > 0.0:
