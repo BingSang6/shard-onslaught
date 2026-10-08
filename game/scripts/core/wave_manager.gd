@@ -133,6 +133,11 @@ func _clear_wave() -> void:
 	wave_time_left = 0.0
 	if spawner != null:
 		spawner.stop()                        # 过渡期停常规刷怪（喘息窗口）
+	# V0.8.5 关末清场：残留怪直接消散（不走 die()，无掉落/经验/图鉴——防"苟到时限白拿收益"，
+	# 击杀仍是唯一成长来源）。修复跨关残留累积：旧版第 N 关没打完的怪会带进第 N+1 关和
+	# BOSS 关（BOSS 还会召唤加怪），越往后越"根本打不完"；喘息窗口现在也真正无怪可捡空投。
+	for m in get_tree().get_nodes_in_group("monsters"):
+		m.queue_free()
 	_boss = null
 	wave_cleared.emit(wave)
 

@@ -487,7 +487,7 @@ func _t_perm_cross_run() -> void:
 	main.spawner.enabled = false
 	main.player.set("_fire_cd", 1e9)
 	check(main.player.max_hp == 110.0, "初始血量 100 + 5×2 = 110")
-	check(main.player.base_attack == 10.0, "初始攻击 8 + 2×1 = 10")
+	check(main.player.base_attack == 12.0, "初始攻击 10 + 2×1 = 12（V0.8.5 基础攻击 8→10）")
 	check(main.player.pick_radius == 110.0, "拾取半径 90 + 20×1 = 110")
 
 

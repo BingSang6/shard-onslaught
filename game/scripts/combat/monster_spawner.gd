@@ -63,8 +63,10 @@ func _physics_process(delta: float) -> void:
 	_spawn_cd -= delta
 	if _spawn_cd <= 0.0:
 		_spawn_cd = _current_interval()
-		# 批量：本关前 30s 单只，之后按本关进度批量（V0.8.1 实机反馈：20s 步进太快，30s 关几乎全程单只）
-		var batch := 1 + int(wave_local / 30.0)
+		# 批量：本关前 40s 单只，之后按本关进度批量
+		# （V0.8.1：20s 步进太快，30s 关几乎全程单只；V0.8.5：30→40s——40s 的第 8 关全程单只，
+		#  批量翻倍只留给更长的未来关卡，配合同期降压表）
+		var batch := 1 + int(wave_local / 40.0)
 		for i in batch:
 			if get_tree().get_nodes_in_group("monsters").size() >= max_monsters:
 				break
